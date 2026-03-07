@@ -11,7 +11,7 @@ defmodule ExAst.MixProject do
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      name: "ExAst",
+      name: "ExAST",
       description: "Search and replace Elixir code by AST pattern",
       source_url: @source_url,
       docs: docs(),
