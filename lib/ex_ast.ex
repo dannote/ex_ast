@@ -1,4 +1,4 @@
-defmodule ExAst do
+defmodule ExAST do
   @moduledoc """
   Search and replace Elixir code by AST pattern.
 
@@ -11,19 +11,19 @@ defmodule ExAst do
   ## Examples
 
       # Find all IO.inspect calls
-      ExAst.search("lib/**/*.ex", "IO.inspect(_)")
+      ExAST.search("lib/**/*.ex", "IO.inspect(_)")
 
       # Replace dbg with the expression itself
-      ExAst.replace("lib/**/*.ex", "dbg(expr)", "expr")
+      ExAST.replace("lib/**/*.ex", "dbg(expr)", "expr")
   """
 
-  alias ExAst.Patcher
+  alias ExAST.Patcher
 
   @type match :: %{
           file: String.t(),
           line: pos_integer(),
           source: String.t(),
-          captures: ExAst.Pattern.captures()
+          captures: ExAST.Pattern.captures()
         }
 
   @doc """

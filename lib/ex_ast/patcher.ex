@@ -1,4 +1,4 @@
-defmodule ExAst.Patcher do
+defmodule ExAST.Patcher do
   @moduledoc """
   Finds and replaces AST patterns in source code.
 
@@ -6,7 +6,7 @@ defmodule ExAst.Patcher do
   to preserve formatting of unchanged code.
   """
 
-  alias ExAst.Pattern
+  alias ExAST.Pattern
 
   @type match :: %{
           node: Macro.t(),

@@ -1,4 +1,4 @@
-defmodule ExAst.Pattern do
+defmodule ExAST.Pattern do
   @moduledoc """
   AST pattern matching with captures.
 

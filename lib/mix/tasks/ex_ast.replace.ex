@@ -38,7 +38,7 @@ defmodule Mix.Tasks.ExAst.Replace do
   defp do_replace(paths, pattern, replacement, dry_run) do
     validate_syntax!(pattern, "pattern")
     validate_syntax!(replacement, "replacement")
-    results = ExAst.replace(paths, pattern, replacement, dry_run: dry_run)
+    results = ExAST.replace(paths, pattern, replacement, dry_run: dry_run)
 
     case results do
       [] ->

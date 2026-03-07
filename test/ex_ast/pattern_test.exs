@@ -1,7 +1,7 @@
-defmodule ExAst.PatternTest do
+defmodule ExAST.PatternTest do
   use ExUnit.Case, async: true
 
-  alias ExAst.Pattern
+  alias ExAST.Pattern
 
   defp match!(source, pattern) do
     ast = Sourceror.parse_string!(source)

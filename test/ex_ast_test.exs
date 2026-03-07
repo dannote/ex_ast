@@ -1,4 +1,4 @@
-defmodule ExAstTest do
+defmodule ExASTTest do
   use ExUnit.Case, async: true
 
   describe "search/2" do
@@ -13,11 +13,11 @@ defmodule ExAstTest do
       IO.inspect(y, label: "debug")
       """)
 
-      results = ExAst.search(dir, "IO.inspect(_)")
+      results = ExAST.search(dir, "IO.inspect(_)")
       assert length(results) == 1
       assert [%{file: _, line: 1, source: _, captures: _}] = results
 
-      results = ExAst.search(dir, "IO.inspect(_, _)")
+      results = ExAST.search(dir, "IO.inspect(_, _)")
       assert length(results) == 1
     end
 
@@ -27,7 +27,7 @@ defmodule ExAstTest do
       IO.inspect(data, label: "debug")
       """)
 
-      [match] = ExAst.search(dir, "IO.inspect(expr, _)")
+      [match] = ExAST.search(dir, "IO.inspect(expr, _)")
       assert match.source =~ "IO.inspect"
       assert Map.has_key?(match.captures, :expr)
     end
@@ -44,7 +44,7 @@ defmodule ExAstTest do
       IO.inspect(other)
       """)
 
-      [{^path, 2}] = ExAst.replace(dir, "IO.inspect(expr)", "dbg(expr)")
+      [{^path, 2}] = ExAST.replace(dir, "IO.inspect(expr)", "dbg(expr)")
       content = File.read!(path)
       assert content =~ "dbg(data)"
       assert content =~ "dbg(other)"
@@ -56,14 +56,14 @@ defmodule ExAstTest do
       path = Path.join(dir, "a.ex")
       File.write!(path, "IO.inspect(data)\n")
 
-      [{^path, 1}] = ExAst.replace(dir, "IO.inspect(expr)", "dbg(expr)", dry_run: true)
+      [{^path, 1}] = ExAST.replace(dir, "IO.inspect(expr)", "dbg(expr)", dry_run: true)
       assert File.read!(path) =~ "IO.inspect"
     end
 
     @tag :tmp_dir
     test "returns empty list when no matches", %{tmp_dir: dir} do
       File.write!(Path.join(dir, "a.ex"), "IO.puts(:ok)\n")
-      assert [] = ExAst.replace(dir, "IO.inspect(_)", "dbg(_)")
+      assert [] = ExAST.replace(dir, "IO.inspect(_)", "dbg(_)")
     end
   end
 end

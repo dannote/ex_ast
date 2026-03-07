@@ -1,4 +1,4 @@
-defmodule ExAst.MixProject do
+defmodule ExAST.MixProject do
   use Mix.Project
 
   @version "0.1.0"

@@ -1,7 +1,7 @@
-defmodule ExAst.PatcherTest do
+defmodule ExAST.PatcherTest do
   use ExUnit.Case, async: true
 
-  alias ExAst.Patcher
+  alias ExAST.Patcher
 
   describe "find_all/2" do
     test "finds multiple matches" do

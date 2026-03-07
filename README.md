@@ -81,16 +81,16 @@ Captures from the pattern are substituted into the replacement by name.
 
 ```elixir
 # Search
-ExAst.search("lib/", "IO.inspect(_)")
+ExAST.search("lib/", "IO.inspect(_)")
 #=> [%{file: "lib/worker.ex", line: 12, source: "IO.inspect(data)", captures: %{}}]
 
 # Replace
-ExAst.replace("lib/", "dbg(expr)", "expr")
+ExAST.replace("lib/", "dbg(expr)", "expr")
 #=> [{"lib/worker.ex", 2}]
 
 # Low-level: single string
-ExAst.Patcher.find_all(source_code, "IO.inspect(_)")
-ExAst.Patcher.replace_all(source_code, "dbg(expr)", "expr")
+ExAST.Patcher.find_all(source_code, "IO.inspect(_)")
+ExAST.Patcher.replace_all(source_code, "dbg(expr)", "expr")
 ```
 
 ## What you can match

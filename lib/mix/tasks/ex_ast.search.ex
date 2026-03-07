@@ -46,7 +46,7 @@ defmodule Mix.Tasks.ExAst.Search do
 
   defp do_search(paths, pattern, opts) do
     validate_pattern!(pattern)
-    results = ExAst.search(paths, pattern)
+    results = ExAST.search(paths, pattern)
 
     if opts[:count] do
       IO.puts(length(results))
