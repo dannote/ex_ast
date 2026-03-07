@@ -19,79 +19,79 @@ defmodule ExAst do
 
   alias ExAst.Patcher
 
+  @type match :: %{
+          file: String.t(),
+          line: pos_integer(),
+          source: String.t(),
+          captures: ExAst.Pattern.captures()
+        }
+
   @doc """
   Searches files for AST pattern matches.
 
-  Returns a list of `{file, line, matched_source}` tuples.
+  Returns a list of match maps with `:file`, `:line`, `:source`, and `:captures`.
   """
-  @spec search(String.t() | [String.t()], String.t()) :: [
-          {String.t(), pos_integer(), String.t()}
-        ]
+  @spec search(String.t() | [String.t()], String.t()) :: [match()]
   def search(paths, pattern) do
     paths
     |> resolve_paths()
-    |> Enum.flat_map(fn file ->
-      source = File.read!(file)
-
-      Patcher.find_all(source, pattern)
-      |> Enum.map(fn %{range: range, node: node} ->
-        {file, range.start[:line], node |> Sourceror.to_string() |> first_line()}
-      end)
-    end)
+    |> Enum.flat_map(&search_file(&1, pattern))
   end
 
   @doc """
   Replaces AST pattern matches in files.
 
   Options:
-  - `:dry_run` — print changes without writing (default: `false`)
+  - `:dry_run` — return changes without writing (default: `false`)
 
-  Returns a list of modified file paths.
+  Returns a list of `{file, count}` tuples for modified files.
   """
-  @spec replace(String.t() | [String.t()], String.t(), String.t(), keyword()) :: [String.t()]
+  @spec replace(String.t() | [String.t()], String.t(), String.t(), keyword()) :: [
+          {String.t(), pos_integer()}
+        ]
   def replace(paths, pattern, replacement, opts \\ []) do
     dry_run = Keyword.get(opts, :dry_run, false)
 
     paths
     |> resolve_paths()
-    |> Enum.flat_map(fn file ->
-      source = File.read!(file)
-      result = Patcher.replace_all(source, pattern, replacement)
+    |> Enum.flat_map(&replace_file(&1, pattern, replacement, dry_run))
+  end
 
-      if result == source do
-        []
-      else
-        write_or_print(file, result, dry_run)
-        [file]
-      end
+  defp search_file(file, pattern) do
+    source = File.read!(file)
+
+    Patcher.find_all(source, pattern)
+    |> Enum.map(fn %{range: range, node: node, captures: captures} ->
+      %{
+        file: file,
+        line: range.start[:line],
+        source: Sourceror.to_string(node),
+        captures: captures
+      }
     end)
   end
 
-  defp write_or_print(file, content, true) do
-    IO.puts("--- #{file}")
-    IO.puts(content)
-  end
+  defp replace_file(file, pattern, replacement, dry_run) do
+    source = File.read!(file)
+    matches = Patcher.find_all(source, pattern)
 
-  defp write_or_print(file, content, false) do
-    File.write!(file, content)
+    if matches == [] do
+      []
+    else
+      result = Patcher.replace_all(source, pattern, replacement)
+      unless dry_run, do: File.write!(file, result)
+      [{file, length(matches)}]
+    end
   end
 
   defp resolve_paths(paths) when is_list(paths), do: Enum.flat_map(paths, &resolve_paths/1)
 
   defp resolve_paths(glob) when is_binary(glob) do
-    if String.contains?(glob, "*") do
-      Path.wildcard(glob)
-    else
-      if File.dir?(glob) do
-        Path.wildcard(Path.join(glob, "**/*.ex"))
-      else
-        [glob]
-      end
+    cond do
+      String.contains?(glob, "*") -> Path.wildcard(glob)
+      File.dir?(glob) -> Path.wildcard(Path.join(glob, "**/*.ex"))
+      true -> [glob]
     end
     |> Enum.filter(&String.ends_with?(&1, ".ex"))
-  end
-
-  defp first_line(string) do
-    string |> String.split("\n") |> hd()
   end
 end

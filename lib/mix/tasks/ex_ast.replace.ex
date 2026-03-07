@@ -28,14 +28,38 @@ defmodule Mix.Tasks.ExAst.Replace do
       [pattern, replacement | paths] ->
         paths = if paths == [], do: ["lib/"], else: paths
         dry_run = opts[:dry_run] || false
-        modified = ExAst.replace(paths, pattern, replacement, dry_run: dry_run)
-        unless dry_run, do: print_summary(modified)
+        do_replace(paths, pattern, replacement, dry_run)
 
       _ ->
         Mix.raise("Usage: mix ex_ast.replace 'pattern' 'replacement' [path ...]")
     end
   end
 
-  defp print_summary([]), do: IO.puts("No matches found.")
-  defp print_summary(files), do: Enum.each(files, &IO.puts("Updated #{&1}"))
+  defp do_replace(paths, pattern, replacement, dry_run) do
+    validate_syntax!(pattern, "pattern")
+    validate_syntax!(replacement, "replacement")
+    results = ExAst.replace(paths, pattern, replacement, dry_run: dry_run)
+
+    case results do
+      [] ->
+        IO.puts("No matches found.")
+
+      files ->
+        total = files |> Enum.map(&elem(&1, 1)) |> Enum.sum()
+        verb = if dry_run, do: "Would update", else: "Updated"
+
+        for {file, count} <- files do
+          IO.puts("#{verb} #{file} (#{count} replacement(s))")
+        end
+
+        IO.puts("\n#{total} replacement(s) in #{length(files)} file(s)")
+    end
+  end
+
+  defp validate_syntax!(code, label) do
+    Code.string_to_quoted!(code)
+  rescue
+    e in [SyntaxError, TokenMissingError, MismatchedDelimiterError] ->
+      Mix.raise("Invalid #{label}: #{Exception.message(e)}")
+  end
 end

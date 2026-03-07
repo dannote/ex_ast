@@ -37,23 +37,52 @@ defmodule Mix.Tasks.ExAst.Search do
     case positional do
       [pattern | paths] ->
         paths = if paths == [], do: ["lib/"], else: paths
-        results = ExAst.search(paths, pattern)
-        print_results(results, opts)
+        do_search(paths, pattern, opts)
 
       _ ->
         Mix.raise("Usage: mix ex_ast.search 'pattern' [path ...]")
     end
   end
 
-  defp print_results(results, opts) do
+  defp do_search(paths, pattern, opts) do
+    validate_pattern!(pattern)
+    results = ExAst.search(paths, pattern)
+
     if opts[:count] do
       IO.puts(length(results))
     else
-      for {file, line, source} <- results do
-        IO.puts("#{file}:#{line}:  #{source}")
-      end
-
-      if results == [], do: IO.puts("No matches found.")
+      Enum.each(results, &print_match/1)
+      IO.puts("\n#{length(results)} match(es)")
     end
+  end
+
+  defp validate_pattern!(pattern) do
+    Code.string_to_quoted!(pattern)
+  rescue
+    e in [SyntaxError, TokenMissingError, MismatchedDelimiterError] ->
+      Mix.raise("Invalid pattern: #{Exception.message(e)}")
+  end
+
+  defp print_match(%{file: file, line: line, source: source, captures: captures}) do
+    IO.puts("#{file}:#{line}")
+    source |> String.split("\n") |> Enum.each(&IO.puts("  #{&1}"))
+    print_captures(captures)
+    IO.puts("")
+  end
+
+  defp print_captures(captures) when map_size(captures) == 0, do: :ok
+
+  defp print_captures(captures) do
+    for {name, value} <- captures do
+      rendered = value |> restore_meta() |> Macro.to_string()
+      IO.puts("  #{name}: #{rendered}")
+    end
+  end
+
+  defp restore_meta(ast) do
+    Macro.prewalk(ast, fn
+      {form, nil, args} -> {form, [], args}
+      other -> other
+    end)
   end
 end
