@@ -38,21 +38,22 @@ defmodule Mix.Tasks.ExAst.Search do
       [pattern | paths] ->
         paths = if paths == [], do: ["lib/"], else: paths
         results = ExAst.search(paths, pattern)
-
-        if opts[:count] do
-          IO.puts(length(results))
-        else
-          for {file, line, source} <- results do
-            IO.puts("#{file}:#{line}:  #{source}")
-          end
-
-          if results == [] do
-            IO.puts("No matches found.")
-          end
-        end
+        print_results(results, opts)
 
       _ ->
         Mix.raise("Usage: mix ex_ast.search 'pattern' [path ...]")
+    end
+  end
+
+  defp print_results(results, opts) do
+    if opts[:count] do
+      IO.puts(length(results))
+    else
+      for {file, line, source} <- results do
+        IO.puts("#{file}:#{line}:  #{source}")
+      end
+
+      if results == [], do: IO.puts("No matches found.")
     end
   end
 end

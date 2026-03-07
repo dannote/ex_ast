@@ -144,18 +144,27 @@ defmodule ExAst.Pattern do
 
   defp match_subset(source_kvs, pattern_kvs, caps) do
     Enum.reduce_while(pattern_kvs, {:ok, caps}, fn {pkey, pval}, {:ok, caps} ->
-      case Enum.find(source_kvs, fn {skey, _} -> skey == pkey end) do
-        {_, sval} ->
-          case do_match(sval, pval, caps) do
-            {:ok, caps} -> {:cont, {:ok, caps}}
-            :error -> {:halt, :error}
-          end
-
-        nil ->
-          {:halt, :error}
-      end
+      source_kvs
+      |> find_value_by_key(pkey)
+      |> match_kv_value(pval, caps)
     end)
   end
+
+  defp find_value_by_key(kvs, key) do
+    case Enum.find(kvs, fn {k, _} -> k == key end) do
+      {_, val} -> {:ok, val}
+      nil -> :error
+    end
+  end
+
+  defp match_kv_value({:ok, sval}, pval, caps) do
+    case do_match(sval, pval, caps) do
+      {:ok, caps} -> {:cont, {:ok, caps}}
+      :error -> {:halt, :error}
+    end
+  end
+
+  defp match_kv_value(:error, _pval, _caps), do: {:halt, :error}
 
   # --- Substitution ---
 

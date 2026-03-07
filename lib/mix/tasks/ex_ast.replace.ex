@@ -27,17 +27,15 @@ defmodule Mix.Tasks.ExAst.Replace do
     case positional do
       [pattern, replacement | paths] ->
         paths = if paths == [], do: ["lib/"], else: paths
-        modified = ExAst.replace(paths, pattern, replacement, dry_run: opts[:dry_run] || false)
-
-        unless opts[:dry_run] do
-          case modified do
-            [] -> IO.puts("No matches found.")
-            files -> Enum.each(files, &IO.puts("Updated #{&1}"))
-          end
-        end
+        dry_run = opts[:dry_run] || false
+        modified = ExAst.replace(paths, pattern, replacement, dry_run: dry_run)
+        unless dry_run, do: print_summary(modified)
 
       _ ->
         Mix.raise("Usage: mix ex_ast.replace 'pattern' 'replacement' [path ...]")
     end
   end
+
+  defp print_summary([]), do: IO.puts("No matches found.")
+  defp print_summary(files), do: Enum.each(files, &IO.puts("Updated #{&1}"))
 end

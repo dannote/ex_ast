@@ -54,23 +54,26 @@ defmodule ExAst do
 
     paths
     |> resolve_paths()
-    |> Enum.filter(fn file ->
+    |> Enum.flat_map(fn file ->
       source = File.read!(file)
       result = Patcher.replace_all(source, pattern, replacement)
 
-      if result != source do
-        if dry_run do
-          IO.puts("--- #{file}")
-          IO.puts(result)
-        else
-          File.write!(file, result)
-        end
-
-        true
+      if result == source do
+        []
       else
-        false
+        write_or_print(file, result, dry_run)
+        [file]
       end
     end)
+  end
+
+  defp write_or_print(file, content, true) do
+    IO.puts("--- #{file}")
+    IO.puts(content)
+  end
+
+  defp write_or_print(file, content, false) do
+    File.write!(file, content)
   end
 
   defp resolve_paths(paths) when is_list(paths), do: Enum.flat_map(paths, &resolve_paths/1)
