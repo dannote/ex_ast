@@ -473,4 +473,65 @@ defmodule ExAST.PatcherTest do
       assert match.captures[:name] == "subject"
     end
   end
+
+  describe "ellipsis matching" do
+    test "find_all matches any arity with ellipsis" do
+      source = """
+      IO.inspect(a)
+      IO.puts("hello")
+      IO.inspect(b, label: "x")
+      """
+
+      matches = Patcher.find_all(source, "IO.inspect(...)")
+      assert length(matches) == 2
+    end
+
+    test "find_all with capture + ellipsis" do
+      source = "Enum.reduce(list, 0, &+/2)"
+      [match] = Patcher.find_all(source, "Enum.reduce(collection, ...)")
+      assert Map.has_key?(match.captures, :collection)
+    end
+
+    test "replace_all with ellipsis pattern" do
+      source = """
+      Logger.debug("a")
+      Logger.debug("b", extra: true)
+      Logger.info("keep")
+      """
+
+      result = Patcher.replace_all(source, "Logger.debug(...)", "Logger.warning(...)")
+      assert result =~ "Logger.warning"
+      assert result =~ "Logger.info"
+      refute result =~ "Logger.debug"
+    end
+
+    test "find_all with def ... end matches any body" do
+      source = """
+      defmodule A do
+        def foo do
+          1
+          2
+          3
+        end
+
+        def bar, do: :ok
+      end
+      """
+
+      matches = Patcher.find_all(source, "def _ do ... end")
+      assert length(matches) == 2
+    end
+
+    test "find_all with ellipsis matches any function args" do
+      source = """
+      defmodule A do
+        def run(a, b, c), do: :ok
+        def run(x), do: :error
+      end
+      """
+
+      matches = Patcher.find_all(source, "def run(...) do ... end")
+      assert length(matches) == 2
+    end
+  end
 end

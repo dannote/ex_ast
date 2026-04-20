@@ -28,6 +28,7 @@ Three rules:
 |--------|---------|
 | `_` or `_name` | Wildcard — matches any node, not captured |
 | `name`, `expr`, `x` | Capture — matches any node, bound by name |
+| `...` | Ellipsis — matches zero or more nodes (args, list items, block body) |
 | Everything else | Literal — must match exactly |
 
 Structs and maps match **partially** — only the keys you write must be
@@ -212,6 +213,10 @@ ExAST.Patcher.find_all(zipper, "IO.inspect(_)")
 ExAST.Patcher.find_all(source_code, quote(do: IO.inspect(_)))
 ExAST.Patcher.replace_all(ast, quote(do: IO.inspect(expr)), quote(do: dbg(expr)))
 
+# ~p sigil for compile-time pattern parsing
+import ExAST.Sigil
+ExAST.Patcher.find_all(source_code, ~p"IO.inspect(...)")
+
 # Syntax-aware diff
 result = ExAST.diff(old_source, new_source)
 result.edits
@@ -235,9 +240,9 @@ Each edit is an `%ExAST.Diff.Edit{}` struct with:
 ## What you can match
 
 ```elixir
-# Function calls
+# Function calls (any arity with ...)
 Enum.map(_, _)
-Logger.info(_)
+Logger.info(...)
 Repo.all(_)
 
 # Definitions
@@ -294,10 +299,10 @@ dbg(_)
 - **No function-name wildcards** — `def _(_) do _ end` won't match
   arbitrary function names because `_` in that position parses as a call,
   not a wildcard. Use the actual name or match the `do` block.
-- **Exact list length** — `[a, b]` only matches two-element lists. No
-  rest/splat syntax.
-- **No multi-expression wildcards** — can't match "any number of
-  statements" inside a `do` block.
+- **Exact list length** — `[a, b]` only matches two-element lists. Use
+  `[a, b, ...]` to match two-or-more, or `[...]` for any length.
+- **No multi-expression wildcards in sequences** — `...` matches a
+  block body but can't be used inside `;`-separated multi-node patterns.
 - **Multi-node requires contiguity** — `a = Repo.get!(_, _); Repo.delete(a)`
   only matches when the two statements are adjacent. Intervening statements
   break the match.

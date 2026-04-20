@@ -332,4 +332,120 @@ defmodule ExAST.PatternTest do
       assert [] = Pattern.match_sequences(nodes, patterns)
     end
   end
+
+  describe "ellipsis (...)" do
+    test "matches zero args" do
+      assert {:ok, %{}} = match!("foo()", "foo(...)")
+    end
+
+    test "matches one arg" do
+      assert {:ok, %{}} = match!("foo(1)", "foo(...)")
+    end
+
+    test "matches multiple args" do
+      assert {:ok, %{}} = match!("foo(1, 2, 3)", "foo(...)")
+    end
+
+    test "captures before ellipsis" do
+      assert {:ok, %{first: _}} = match!("foo(1, 2, 3)", "foo(first, ...)")
+    end
+
+    test "captures after ellipsis" do
+      assert {:ok, %{last: _}} = match!("foo(1, 2, 3)", "foo(..., last)")
+    end
+
+    test "captures both sides of ellipsis" do
+      assert {:ok, caps} = match!("foo(1, 2, 3, 4)", "foo(first, ..., last)")
+      assert Map.has_key?(caps, :first)
+      assert Map.has_key?(caps, :last)
+    end
+
+    test "rejects too few args for surrounding captures" do
+      assert :error = match!("foo(1)", "foo(first, ..., last)")
+    end
+
+    test "ellipsis in list" do
+      assert {:ok, %{}} = match!("[1, 2, 3]", "[...]")
+    end
+
+    test "ellipsis with head in list" do
+      assert {:ok, %{head: _}} = match!("[1, 2, 3]", "[head, ...]")
+    end
+
+    test "ellipsis with tail in list" do
+      assert {:ok, %{last: _}} = match!("[1, 2, 3]", "[..., last]")
+    end
+
+    test "matches remote call any arity" do
+      assert {:ok, %{}} = match!("Enum.map(list, fun)", "Enum.map(...)")
+    end
+
+    test "matches remote call with capture + ellipsis" do
+      assert {:ok, %{list: _}} = match!("Enum.reduce(list, acc, fun)", "Enum.reduce(list, ...)")
+    end
+
+    test "ellipsis in do block" do
+      assert {:ok, %{}} = match!("def foo do\n  1\n  2\n  3\nend", "def foo do ... end")
+    end
+
+    test "ellipsis in case clause" do
+      assert {:ok, %{}} = match!("case x do\n  :ok -> 1\nend", "case _ do ... end")
+    end
+
+    test "no match when ellipsis pattern head mismatches" do
+      assert :error = match!("bar(1, 2)", "foo(...)")
+    end
+
+    test "quoted ellipsis" do
+      ast = Sourceror.parse_string!("foo(1, 2, 3)")
+      assert {:ok, %{}} = Pattern.match(ast, quote(do: foo(...)))
+    end
+
+    test "quoted ellipsis with capture" do
+      ast = Sourceror.parse_string!("foo(1, 2, 3)")
+      assert {:ok, %{first: _}} = Pattern.match(ast, quote(do: foo(first, ...)))
+    end
+  end
+
+  describe "~p sigil" do
+    import ExAST.Sigil
+
+    test "parses pattern at compile time" do
+      pattern = ~p"IO.inspect(_)"
+      ast = Sourceror.parse_string!("IO.inspect(data)")
+      assert {:ok, %{}} = Pattern.match(ast, pattern)
+    end
+
+    test "captures work" do
+      pattern = ~p"Enum.map(list, fun)"
+      ast = Sourceror.parse_string!("Enum.map(data, &to_string/1)")
+      assert {:ok, caps} = Pattern.match(ast, pattern)
+      assert Map.has_key?(caps, :list)
+      assert Map.has_key?(caps, :fun)
+    end
+
+    test "ellipsis in sigil" do
+      pattern = ~p"foo(first, ...)"
+      ast = Sourceror.parse_string!("foo(1, 2, 3)")
+      assert {:ok, %{first: _}} = Pattern.match(ast, pattern)
+    end
+
+    test "works with find_all" do
+      source = """
+      IO.inspect(a)
+      IO.puts("hello")
+      IO.inspect(b, label: "x")
+      """
+
+      matches = ExAST.Patcher.find_all(source, ~p"IO.inspect(...)")
+      assert length(matches) == 2
+    end
+
+    test "works with replace_all" do
+      source = "dbg(data)\n"
+      result = ExAST.Patcher.replace_all(source, ~p"dbg(expr)", ~p"expr")
+      assert result =~ "data"
+      refute result =~ "dbg"
+    end
+  end
 end

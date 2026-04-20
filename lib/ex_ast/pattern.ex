@@ -3,8 +3,9 @@ defmodule ExAST.Pattern do
   AST pattern matching with captures.
 
   Patterns are valid Elixir syntax where:
-  - Bare variables (`name`, `expr`) capture the matched AST node
-  - `_` and `_name` are wildcards (match anything, don't capture)
+  - `name`, `expr` — capture the matched AST node
+  - `_` or `_name` — wildcard, matches anything, not captured
+  - `...` — matches zero or more nodes (args, list items, block statements)
   - Structs and maps match partially (only specified keys must be present)
   - Pipes are normalized (`data |> Enum.map(f)` matches `Enum.map(data, f)`)
   - Multi-statement patterns match contiguous sequences in blocks
@@ -15,6 +16,12 @@ defmodule ExAST.Pattern do
 
       Pattern.match(node, "IO.inspect(_)")
       Pattern.match(node, quote(do: IO.inspect(_)))
+
+  Use `...` for variable-arity matching:
+
+      Pattern.match(node, "IO.inspect(...)")       # any arity
+      Pattern.match(node, "foo(first, ...)")        # 1+ args, capture first
+      Pattern.match(node, "def foo(_) do ... end")  # any body
   """
 
   @type captures :: %{atom() => term()}
@@ -149,8 +156,13 @@ defmodule ExAST.Pattern do
 
   # --- Matching ---
 
+  # Wildcard: _ or _name
   defp do_match(_node, {:_, nil, nil}, caps), do: {:ok, caps}
 
+  # Ellipsis as single-node wildcard (matches any node in non-list position)
+  defp do_match(_node, {:..., nil, _}, caps), do: {:ok, caps}
+
+  # Named capture or underscore-prefixed non-capture
   defp do_match(node, {name, nil, nil}, caps) when is_atom(name) do
     case Atom.to_string(name) do
       "_" <> _ -> {:ok, caps}
@@ -158,6 +170,7 @@ defmodule ExAST.Pattern do
     end
   end
 
+  # Struct: partial key match
   defp do_match(
          {:%, nil, [sname, {:%{}, nil, skvs}]},
          {:%, nil, [pname, {:%{}, nil, pkvs}]},
@@ -168,10 +181,12 @@ defmodule ExAST.Pattern do
     end
   end
 
+  # Map: partial key match
   defp do_match({:%{}, nil, skvs}, {:%{}, nil, pkvs}, caps) do
     match_subset(skvs, pkvs, caps)
   end
 
+  # Dot-call: Module.function(args)
   defp do_match(
          {{:., nil, sdot}, nil, sargs},
          {{:., nil, pdot}, nil, pargs},
@@ -182,24 +197,77 @@ defmodule ExAST.Pattern do
     end
   end
 
+  # 3-tuple with same atom head (operators, special forms)
   defp do_match({head, nil, schild}, {head, nil, pchild}, caps) when is_atom(head) do
     do_match(schild, pchild, caps)
   end
 
+  # 3-tuple with different heads
   defp do_match({shead, nil, schild}, {phead, nil, pchild}, caps) do
     with {:ok, caps} <- do_match(shead, phead, caps) do
       do_match(schild, pchild, caps)
     end
   end
 
+  # 2-tuple (keyword pair, two-element tuple)
   defp do_match({sa, sb}, {pa, pb}, caps) do
     with {:ok, caps} <- do_match(sa, pa, caps) do
       do_match(sb, pb, caps)
     end
   end
 
+  # Lists with `...` (ellipsis) — variable-length matching
   defp do_match(source, pattern, caps)
-       when is_list(source) and is_list(pattern) and length(source) == length(pattern) do
+       when is_list(source) and is_list(pattern) do
+    if has_ellipsis?(pattern) do
+      match_list_with_ellipsis(source, pattern, caps)
+    else
+      match_list_exact(source, pattern, caps)
+    end
+  end
+
+  # Literal equality
+  defp do_match(same, same, caps), do: {:ok, caps}
+
+  defp do_match(_source, _pattern, _caps), do: :error
+
+  # --- Ellipsis matching ---
+
+  defp has_ellipsis?(pattern) do
+    Enum.any?(pattern, &ellipsis?/1)
+  end
+
+  defp ellipsis?({:..., _, _}), do: true
+  defp ellipsis?(_), do: false
+
+  defp match_list_with_ellipsis(source, pattern, caps) do
+    {before_ellipsis, after_ellipsis} = split_on_ellipsis(pattern)
+    before_count = length(before_ellipsis)
+    after_count = length(after_ellipsis)
+
+    if length(source) < before_count + after_count do
+      :error
+    else
+      source_before = Enum.take(source, before_count)
+      source_after = Enum.take(source, -after_count)
+      match_before_and_after(source_before, before_ellipsis, source_after, after_ellipsis, caps)
+    end
+  end
+
+  defp match_before_and_after(source_before, before, source_after, after_, caps) do
+    with {:ok, caps} <- match_list_exact(source_before, before, caps) do
+      match_list_exact(source_after, after_, caps)
+    end
+  end
+
+  defp split_on_ellipsis(pattern) do
+    idx = Enum.find_index(pattern, &ellipsis?/1)
+    before = Enum.take(pattern, idx)
+    after_ = Enum.drop(pattern, idx + 1)
+    {before, after_}
+  end
+
+  defp match_list_exact(source, pattern, caps) when length(source) == length(pattern) do
     Enum.zip(source, pattern)
     |> Enum.reduce_while({:ok, caps}, fn {s, p}, {:ok, caps} ->
       case do_match(s, p, caps) do
@@ -209,9 +277,7 @@ defmodule ExAST.Pattern do
     end)
   end
 
-  defp do_match(same, same, caps), do: {:ok, caps}
-
-  defp do_match(_source, _pattern, _caps), do: :error
+  defp match_list_exact(_source, _pattern, _caps), do: :error
 
   # --- Captures ---
 

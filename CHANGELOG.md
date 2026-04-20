@@ -25,6 +25,12 @@
   Patcher.replace_all(ast, quote(do: IO.inspect(expr)), quote(do: dbg(expr)))
   ```
   `inside`/`not_inside` options also accept quoted.
+- **Ellipsis (`...`)** — matches zero or more nodes in args, lists, and
+  block bodies. `IO.inspect(...)` matches any arity,
+  `foo(first, ..., last)` captures surrounding args,
+  `def run(_) do ... end` matches any body.
+- **`~p` sigil** — compile-time pattern parsing via `import ExAST.Sigil`:
+  `~p"IO.inspect(...)"` returns parsed AST with no runtime overhead.
 - **ex_dna** added to CI checks
 
 ## 0.3.0
