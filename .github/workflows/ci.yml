@@ -46,8 +46,4 @@ jobs:
           restore-keys: plt-${{ matrix.otp }}-${{ matrix.elixir }}-
 
       - run: mix deps.get
-      - run: mix compile --warnings-as-errors
-      - run: mix format --check-formatted
-      - run: mix credo --strict
-      - run: mix dialyzer
-      - run: mix test
+      - run: mix ci
