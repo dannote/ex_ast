@@ -3,8 +3,15 @@ defmodule ExAST.Patcher do
   Finds and replaces AST patterns in source code.
 
   Accepts source strings, AST nodes, or Sourceror zippers as input.
-  Source-string functions preserve formatting via `Sourceror.patch_string/2`.
-  AST/zipper functions return modified AST trees.
+  Patterns and replacements can be strings or quoted expressions.
+
+  Source-string input preserves formatting via `Sourceror.patch_string/2`.
+  AST/zipper input returns modified AST trees.
+
+      # All equivalent
+      Patcher.find_all(source, "IO.inspect(_)")
+      Patcher.find_all(ast, quote(do: IO.inspect(_)))
+      Patcher.find_all(zipper, quote(do: IO.inspect(_)))
   """
 
   alias ExAST.Pattern
@@ -20,16 +27,14 @@ defmodule ExAST.Patcher do
   Finds all occurrences of `pattern`.
 
   The first argument can be a source string, a `Sourceror.Zipper`, or a raw AST.
+  The pattern can be a string or a quoted expression.
 
   ## Options
 
     * `:inside` — only match nodes nested within an ancestor matching this pattern
     * `:not_inside` — reject nodes nested within an ancestor matching this pattern
-
-  Returns a list of matches with the matched node, its source range,
-  and any captured values.
   """
-  @spec find_all(String.t() | Zipper.t() | Macro.t(), String.t(), keyword()) :: [match()]
+  @spec find_all(String.t() | Zipper.t() | Macro.t(), Pattern.pattern(), keyword()) :: [match()]
   def find_all(input, pattern, opts \\ [])
 
   def find_all(source, pattern, opts) when is_binary(source) do
@@ -50,15 +55,17 @@ defmodule ExAST.Patcher do
   When given a source string, returns a modified source string with
   formatting preserved. When given a zipper or AST, returns modified AST.
 
+  Pattern and replacement can be strings or quoted expressions.
   Captures from the pattern are substituted into the replacement template.
   Accepts the same `:inside` / `:not_inside` options as `find_all/3`.
   """
-  @spec replace_all(String.t(), String.t(), String.t(), keyword()) :: String.t()
-  @spec replace_all(Zipper.t() | Macro.t(), String.t(), String.t(), keyword()) :: Macro.t()
+  @spec replace_all(String.t(), Pattern.pattern(), Pattern.pattern(), keyword()) :: String.t()
+  @spec replace_all(Zipper.t() | Macro.t(), Pattern.pattern(), Pattern.pattern(), keyword()) ::
+          Macro.t()
   def replace_all(input, pattern, replacement, opts \\ [])
 
   def replace_all(source, pattern, replacement, opts) when is_binary(source) do
-    replacement_ast = Code.string_to_quoted!(replacement)
+    replacement_ast = to_quoted(replacement)
     matches = find_all(source, pattern, opts)
 
     patches =
@@ -94,7 +101,7 @@ defmodule ExAST.Patcher do
   # --- Core replace logic (AST → AST) ---
 
   defp do_replace_all_ast(ast, pattern, replacement, opts) do
-    replacement_ast = Code.string_to_quoted!(replacement)
+    replacement_ast = to_quoted(replacement)
     matches = do_find_all(ast, pattern, opts)
     matched_nodes = MapSet.new(matches, & &1.node)
 
@@ -119,28 +126,6 @@ defmodule ExAST.Patcher do
       node
     end
   end
-
-  defp strip_sourceror_meta(captures) do
-    Map.new(captures, fn {key, value} -> {key, do_strip_sourceror_meta(value)} end)
-  end
-
-  defp do_strip_sourceror_meta({form, _meta, args}) when is_atom(form) do
-    {form, [], do_strip_sourceror_meta(args)}
-  end
-
-  defp do_strip_sourceror_meta({form, _meta, args}) do
-    {do_strip_sourceror_meta(form), [], do_strip_sourceror_meta(args)}
-  end
-
-  defp do_strip_sourceror_meta({left, right}) do
-    {do_strip_sourceror_meta(left), do_strip_sourceror_meta(right)}
-  end
-
-  defp do_strip_sourceror_meta(list) when is_list(list) do
-    Enum.map(list, &do_strip_sourceror_meta/1)
-  end
-
-  defp do_strip_sourceror_meta(other), do: other
 
   # --- Single-node matching ---
 
@@ -268,12 +253,33 @@ defmodule ExAST.Patcher do
     end)
   end
 
+  defp to_quoted(pattern) when is_binary(pattern), do: Code.string_to_quoted!(pattern)
+  defp to_quoted(pattern), do: pattern
+
   defp restore_meta(ast) do
     Macro.prewalk(ast, fn
       {form, nil, args} -> {form, [], args}
       other -> other
     end)
   end
+
+  defp strip_sourceror_meta(captures) do
+    Map.new(captures, fn {key, value} -> {key, do_strip_sourceror_meta(value)} end)
+  end
+
+  defp do_strip_sourceror_meta({form, _meta, args}) when is_atom(form),
+    do: {form, [], do_strip_sourceror_meta(args)}
+
+  defp do_strip_sourceror_meta({form, _meta, args}),
+    do: {do_strip_sourceror_meta(form), [], do_strip_sourceror_meta(args)}
+
+  defp do_strip_sourceror_meta({left, right}),
+    do: {do_strip_sourceror_meta(left), do_strip_sourceror_meta(right)}
+
+  defp do_strip_sourceror_meta(list) when is_list(list),
+    do: Enum.map(list, &do_strip_sourceror_meta/1)
+
+  defp do_strip_sourceror_meta(other), do: other
 
   defp safe_range(node) do
     Sourceror.get_range(node)

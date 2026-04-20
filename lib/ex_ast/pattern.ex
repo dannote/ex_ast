@@ -10,46 +10,55 @@ defmodule ExAST.Pattern do
   - Multi-statement patterns match contiguous sequences in blocks
 
   Repeated variable names require the same value at every position.
+
+  Patterns can be given as strings or as quoted expressions:
+
+      Pattern.match(node, "IO.inspect(_)")
+      Pattern.match(node, quote(do: IO.inspect(_)))
   """
 
   @type captures :: %{atom() => term()}
+  @type pattern :: String.t() | Macro.t()
 
   @doc """
-  Returns `true` if the pattern string contains multiple statements
+  Returns `true` if the pattern contains multiple statements
   (separated by `;` or newlines), enabling sequential matching.
   """
-  @spec multi_node?(String.t()) :: boolean()
-  def multi_node?(pattern_string) do
-    case Code.string_to_quoted!(pattern_string) do
+  @spec multi_node?(pattern()) :: boolean()
+  def multi_node?(pattern) do
+    case to_quoted(pattern) do
       {:__block__, _, [_ | _] = children} when length(children) > 1 -> true
       _ -> false
     end
   end
 
   @doc """
-  Returns the individual pattern ASTs from a multi-node pattern string.
+  Returns the individual pattern ASTs from a (possibly multi-node) pattern.
   """
-  @spec pattern_nodes(String.t()) :: [Macro.t()]
-  def pattern_nodes(pattern_string) do
-    case Code.string_to_quoted!(pattern_string) do
+  @spec pattern_nodes(pattern()) :: [Macro.t()]
+  def pattern_nodes(pattern) do
+    case to_quoted(pattern) do
       {:__block__, _, children} when is_list(children) -> children
       single -> [single]
     end
   end
 
   @doc """
-  Matches a Sourceror AST node against a pattern string.
+  Matches an AST node against a pattern.
 
+  The pattern can be a string or a quoted expression.
   Returns `{:ok, captures}` on match, `:error` otherwise.
   """
-  @spec match(Macro.t(), String.t()) :: {:ok, captures()} | :error
-  def match(node, pattern_string) when is_binary(pattern_string) do
-    pattern_ast = Code.string_to_quoted!(pattern_string)
-    do_match(normalize(node), normalize(pattern_ast), %{})
+  @spec match(Macro.t(), pattern()) :: {:ok, captures()} | :error
+  def match(node, pattern) do
+    do_match(normalize(node), pattern |> to_quoted() |> normalize(), %{})
   end
 
   @doc """
-  Matches a Sourceror AST node against an already-parsed pattern AST.
+  Matches an AST node against an already-parsed pattern AST.
+
+  Equivalent to `match/2` with a quoted pattern, kept for
+  backward compatibility.
   """
   @spec match_ast(Macro.t(), Macro.t()) :: {:ok, captures()} | :error
   def match_ast(node, pattern_ast) do
@@ -106,18 +115,23 @@ defmodule ExAST.Pattern do
     do_substitute(template_ast, captures)
   end
 
+  # --- Pattern coercion ---
+
+  defp to_quoted(pattern) when is_binary(pattern), do: Code.string_to_quoted!(pattern)
+  defp to_quoted(pattern), do: pattern
+
   # --- Normalization ---
 
-  # Strips metadata, unwraps __block__ wrappers, and desugars pipes
-  # so both pattern and source ASTs have the same shape.
   defp normalize({:__block__, _meta, [inner]}), do: normalize(inner)
 
-  # Desugar pipe: `a |> f(b, c)` → `f(a, b, c)`
   defp normalize({:|>, _meta, [left, {form, meta2, args}]}) when is_list(args),
     do: normalize({form, meta2, [left | args]})
 
   defp normalize({:|>, _meta, [left, {form, meta2, nil}]}),
     do: normalize({form, meta2, [left]})
+
+  defp normalize({form, _meta, context}) when is_atom(form) and is_atom(context),
+    do: {form, nil, nil}
 
   defp normalize({form, _meta, args}) when is_atom(form),
     do: {form, nil, normalize(args)}
@@ -135,7 +149,6 @@ defmodule ExAST.Pattern do
 
   # --- Matching ---
 
-  # Wildcard: _ or _name
   defp do_match(_node, {:_, nil, nil}, caps), do: {:ok, caps}
 
   defp do_match(node, {name, nil, nil}, caps) when is_atom(name) do
@@ -145,7 +158,6 @@ defmodule ExAST.Pattern do
     end
   end
 
-  # Struct: partial key match
   defp do_match(
          {:%, nil, [sname, {:%{}, nil, skvs}]},
          {:%, nil, [pname, {:%{}, nil, pkvs}]},
@@ -156,12 +168,10 @@ defmodule ExAST.Pattern do
     end
   end
 
-  # Map: partial key match
   defp do_match({:%{}, nil, skvs}, {:%{}, nil, pkvs}, caps) do
     match_subset(skvs, pkvs, caps)
   end
 
-  # Dot-call: Module.function(args)
   defp do_match(
          {{:., nil, sdot}, nil, sargs},
          {{:., nil, pdot}, nil, pargs},
@@ -172,26 +182,22 @@ defmodule ExAST.Pattern do
     end
   end
 
-  # 3-tuple with same atom head (operators, special forms)
   defp do_match({head, nil, schild}, {head, nil, pchild}, caps) when is_atom(head) do
     do_match(schild, pchild, caps)
   end
 
-  # 3-tuple with different heads
   defp do_match({shead, nil, schild}, {phead, nil, pchild}, caps) do
     with {:ok, caps} <- do_match(shead, phead, caps) do
       do_match(schild, pchild, caps)
     end
   end
 
-  # 2-tuple (keyword pair, two-element tuple)
   defp do_match({sa, sb}, {pa, pb}, caps) do
     with {:ok, caps} <- do_match(sa, pa, caps) do
       do_match(sb, pb, caps)
     end
   end
 
-  # Lists (exact length)
   defp do_match(source, pattern, caps)
        when is_list(source) and is_list(pattern) and length(source) == length(pattern) do
     Enum.zip(source, pattern)
@@ -203,7 +209,6 @@ defmodule ExAST.Pattern do
     end)
   end
 
-  # Literal equality
   defp do_match(same, same, caps), do: {:ok, caps}
 
   defp do_match(_source, _pattern, _caps), do: :error
@@ -246,13 +251,13 @@ defmodule ExAST.Pattern do
 
   # --- Substitution ---
 
-  defp do_substitute({name, meta, nil}, captures) when is_atom(name) do
+  defp do_substitute({name, meta, context}, captures) when is_atom(name) and is_atom(context) do
     s = Atom.to_string(name)
 
     if not String.starts_with?(s, "_") and Map.has_key?(captures, name) do
       Map.fetch!(captures, name)
     else
-      {name, meta, nil}
+      {name, meta, context}
     end
   end
 

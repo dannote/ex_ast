@@ -1,4 +1,6 @@
 defmodule ExAST.PatcherTest do
+  # credo:disable-for-this-file Credo.Check.Warning.IoInspect
+  # credo:disable-for-this-file Credo.Check.Warning.Dbg
   use ExUnit.Case, async: true
 
   alias ExAST.Patcher
@@ -415,6 +417,60 @@ defmodule ExAST.PatcherTest do
       source = inspect(result, limit: :infinity)
       assert source =~ ":inspect"
       assert source =~ ":dbg"
+    end
+  end
+
+  describe "quoted patterns" do
+    test "find_all accepts quoted pattern" do
+      source = "IO.inspect(data)"
+      matches = Patcher.find_all(source, quote(do: IO.inspect(_)))
+      assert [%{captures: %{}}] = matches
+    end
+
+    test "find_all with quoted captures" do
+      source = "Enum.map(list, fun)"
+      [match] = Patcher.find_all(source, quote(do: Enum.map(input, mapper)))
+      assert Map.has_key?(match.captures, :input)
+      assert Map.has_key?(match.captures, :mapper)
+    end
+
+    test "replace_all with quoted pattern and replacement on source string" do
+      source = "IO.inspect(data)\n"
+      result = Patcher.replace_all(source, quote(do: IO.inspect(expr)), quote(do: dbg(expr)))
+      assert result =~ "dbg(data)"
+      refute result =~ "IO.inspect"
+    end
+
+    test "replace_all with quoted on AST" do
+      ast = Sourceror.parse_string!("IO.inspect(data)")
+      result = Patcher.replace_all(ast, quote(do: IO.inspect(expr)), quote(do: dbg(expr)))
+      assert Macro.to_string(result) =~ "dbg(data)"
+    end
+
+    test "find_all with quoted inside/not_inside" do
+      source = """
+      defmodule A do
+        def run, do: IO.inspect(1)
+        defp helper, do: IO.inspect(2)
+      end
+      """
+
+      matches =
+        Patcher.find_all(source, quote(do: IO.inspect(_)), inside: quote(do: defp(_, do: _)))
+
+      assert [_] = matches
+    end
+
+    test "mixed string and quoted" do
+      source = "IO.inspect(data)\n"
+      result = Patcher.replace_all(source, "IO.inspect(expr)", quote(do: dbg(expr)))
+      assert result =~ "dbg(data)"
+    end
+
+    test "quoted struct partial match" do
+      source = ~s(%Step{id: "subject", title: "Hello"})
+      [match] = Patcher.find_all(source, quote(do: %Step{id: name}))
+      assert match.captures[:name] == "subject"
     end
   end
 end
