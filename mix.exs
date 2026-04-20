@@ -33,7 +33,8 @@ defmodule ExAST.MixProject do
       {:sourceror, "~> 1.7"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:ex_dna, "~> 1.3", only: [:dev, :test], runtime: false}
     ]
   end
 
@@ -62,7 +63,8 @@ defmodule ExAST.MixProject do
         "format --check-formatted",
         "credo --strict",
         "dialyzer",
-        "test"
+        "test",
+        "ex_dna"
       ]
     ]
   end
