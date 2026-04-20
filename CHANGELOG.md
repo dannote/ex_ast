@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+
+- **Ellipsis (`...`)** — matches zero or more nodes in function args, lists,
+  and block bodies: `IO.inspect(...)`, `foo(first, ..., last)`,
+  `def run(_) do ... end`
+- **`~p` sigil** — compile-time pattern parsing via `import ExAST.Sigil`
+
 ## 0.4.0
 
 ### Added

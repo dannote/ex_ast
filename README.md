@@ -15,7 +15,7 @@ mix ex_ast.diff lib/old.ex lib/new.ex
 
 ```elixir
 def deps do
-  [{:ex_ast, "~> 0.4", only: [:dev, :test], runtime: false}]
+  [{:ex_ast, "~> 0.5", only: [:dev, :test], runtime: false}]
 end
 ```
 
