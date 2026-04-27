@@ -8,6 +8,7 @@ defmodule ExAST do
   - Structs/maps match partially
   - Pipes are normalized (`data |> Enum.map(f)` matches `Enum.map(data, f)`)
   - Everything else matches literally
+  - CSS-like selectors can be built with `ExAST.Selector`
 
   ## Options
 
@@ -27,6 +28,16 @@ defmodule ExAST do
 
       # Match piped and direct calls interchangeably
       ExAST.search("lib/", "Enum.map(_, _)")  # also finds `data |> Enum.map(f)`
+
+      # CSS-like selector relationships
+      import ExAST.Selector
+
+      selector =
+        pattern("defmodule _ do ... end")
+        |> descendant("def _ do ... end")
+        |> child("IO.inspect(_)")
+
+      ExAST.search("lib/", selector)
 
       # Syntax-aware diff
       result = ExAST.diff(old_source, new_source)
@@ -52,7 +63,7 @@ defmodule ExAST do
   Returns a list of match maps with `:file`, `:line`, `:source`, and `:captures`.
   Accepts `:inside` and `:not_inside` options to filter by context.
   """
-  @spec search(String.t() | [String.t()], String.t(), keyword()) :: [match()]
+  @spec search(String.t() | [String.t()], String.t() | ExAST.Selector.t(), keyword()) :: [match()]
   def search(paths, pattern, opts \\ []) do
     paths
     |> resolve_paths()
@@ -69,9 +80,10 @@ defmodule ExAST do
 
   Returns a list of `{file, count}` tuples for modified files.
   """
-  @spec replace(String.t() | [String.t()], String.t(), String.t(), keyword()) :: [
-          {String.t(), pos_integer()}
-        ]
+  @spec replace(String.t() | [String.t()], String.t() | ExAST.Selector.t(), String.t(), keyword()) ::
+          [
+            {String.t(), pos_integer()}
+          ]
   def replace(paths, pattern, replacement, opts \\ []) do
     {dry_run, where_opts} = Keyword.pop(opts, :dry_run, false)
 

@@ -15,7 +15,7 @@ mix ex_ast.diff lib/old.ex lib/new.ex
 
 ```elixir
 def deps do
-  [{:ex_ast, "~> 0.5", only: [:dev, :test], runtime: false}]
+  [{:ex_ast, "~> 0.6", only: [:dev, :test], runtime: false}]
 end
 ```
 
@@ -61,7 +61,7 @@ mix ex_ast.search 'a = Repo.get!(_, _); Repo.delete(a)'
 # `a` must refer to the same variable in both
 ```
 
-### Where conditions
+### CLI relationship filters
 
 Filter matches by their surrounding context with `--inside` and `--not-inside`:
 
@@ -75,6 +75,87 @@ mix ex_ast.search --not-inside 'test _ do _ end' 'IO.inspect(_)'
 # Both at once
 mix ex_ast.search --inside 'def _ do _ end' --not-inside 'if _ do _ end' 'IO.inspect(_)'
 ```
+
+Search and replace also support CSS-like relationship predicates:
+
+```bash
+# Direct semantic parent only — excludes nested calls inside if/case/fn blocks
+mix ex_ast.search 'IO.inspect(expr)' --parent 'def _ do ... end'
+
+# Any semantic ancestor
+mix ex_ast.search 'IO.inspect(expr)' --ancestor 'def _ do ... end'
+
+# Find functions that contain a transaction but no debug output
+mix ex_ast.search 'def name do ... end' \
+  --has 'Repo.transaction(_)' \
+  --not-has 'IO.inspect(_)'
+
+# Replace only direct function-body debug calls
+mix ex_ast.replace 'IO.inspect(expr)' 'Logger.debug(inspect(expr))' lib/ \
+  --parent 'def _ do ... end'
+
+# Replace calls only in functions matching broader context predicates
+mix ex_ast.replace 'Repo.get!(schema, id)' 'Repo.fetch!(schema, id)' lib/ \
+  --ancestor 'def _ do ... end' \
+  --not-ancestor 'test _ do ... end'
+```
+
+Available CLI filters:
+
+| Flag | Meaning |
+|------|---------|
+| `--parent`, `--not-parent` | Direct semantic parent |
+| `--ancestor`, `--not-ancestor` | Any semantic ancestor |
+| `--inside`, `--not-inside` | Aliases for ancestor filters |
+| `--has-child`, `--not-has-child` | Direct semantic child |
+| `--has-descendant`, `--not-has-descendant` | Any semantic descendant |
+| `--has`, `--not-has` | Aliases for descendant filters |
+
+### Selectors
+
+Use `ExAST.Selector` when a match depends on CSS-like AST relationships:
+
+```elixir
+import ExAST.Selector
+
+selector =
+  pattern("defmodule _ do ... end")
+  |> descendant("def _ do ... end")
+  |> child("IO.inspect(_)")
+
+ExAST.search("lib/", selector)
+```
+
+Use `where/2` with predicates to keep or reject the selected node without
+changing what gets returned:
+
+```elixir
+import Kernel, except: [not: 1]
+import ExAST.Selector
+
+selector =
+  pattern("def _ do ... end")
+  |> where(has_descendant("Repo.transaction(_)"))
+  |> where(not(has_descendant("IO.inspect(_)")))
+```
+
+Available relationships and predicates:
+
+| Function | Meaning |
+|----------|---------|
+| `child/2` | Select direct semantic children matching the pattern |
+| `descendant/2` | Select nested semantic descendants matching the pattern |
+| `where/2` | Add a predicate filter without changing the selected node |
+| `parent/1` / `parent/2` | Match/apply a direct semantic parent predicate |
+| `ancestor/1` / `ancestor/2` | Match/apply a semantic ancestor predicate |
+| `has_child/1` / `has_child/2` | Match/apply a direct semantic child predicate |
+| `has_descendant/1`, `has/1` | Match a nested descendant predicate |
+| `has_descendant/2`, `has/2` | Apply a nested descendant predicate |
+| `not/1` | Negate a predicate for `where/2` |
+
+`not/1` intentionally mirrors Ecto-style query predicates. Because it shares a
+name with `Kernel.not/1`, import with `import Kernel, except: [not: 1]` when you
+want to call bare `not(...)`.
 
 ## Examples
 

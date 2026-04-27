@@ -12,9 +12,15 @@ defmodule ExAST.Patcher do
       Patcher.find_all(source, "IO.inspect(_)")
       Patcher.find_all(ast, quote(do: IO.inspect(_)))
       Patcher.find_all(zipper, quote(do: IO.inspect(_)))
+
+      import ExAST.Selector
+
+      Patcher.find_all(source, pattern("defmodule _ do ... end") |> descendant("IO.inspect(_)"))
   """
 
   alias ExAST.Pattern
+  alias ExAST.Selector
+  alias ExAST.Selector.Predicate
   alias Sourceror.Zipper
 
   @type match :: %{
@@ -34,11 +40,22 @@ defmodule ExAST.Patcher do
     * `:inside` — only match nodes nested within an ancestor matching this pattern
     * `:not_inside` — reject nodes nested within an ancestor matching this pattern
   """
-  @spec find_all(String.t() | Zipper.t() | Macro.t(), Pattern.pattern(), keyword()) :: [match()]
+  @spec find_all(String.t() | Zipper.t() | Macro.t(), Pattern.pattern() | Selector.t(), keyword()) ::
+          [
+            match()
+          ]
   def find_all(input, pattern, opts \\ [])
+
+  def find_all(source, %Selector{} = selector, opts) when is_binary(source) do
+    source |> Sourceror.parse_string!() |> do_find_all(selector, opts)
+  end
 
   def find_all(source, pattern, opts) when is_binary(source) do
     source |> Sourceror.parse_string!() |> do_find_all(pattern, opts)
+  end
+
+  def find_all(%Zipper{} = zipper, %Selector{} = selector, opts) do
+    zipper |> Zipper.topmost_root() |> do_find_all(selector, opts)
   end
 
   def find_all(%Zipper{} = zipper, pattern, opts) do
@@ -59,8 +76,14 @@ defmodule ExAST.Patcher do
   Captures from the pattern are substituted into the replacement template.
   Accepts the same `:inside` / `:not_inside` options as `find_all/3`.
   """
-  @spec replace_all(String.t(), Pattern.pattern(), Pattern.pattern(), keyword()) :: String.t()
-  @spec replace_all(Zipper.t() | Macro.t(), Pattern.pattern(), Pattern.pattern(), keyword()) ::
+  @spec replace_all(String.t(), Pattern.pattern() | Selector.t(), Pattern.pattern(), keyword()) ::
+          String.t()
+  @spec replace_all(
+          Zipper.t() | Macro.t(),
+          Pattern.pattern() | Selector.t(),
+          Pattern.pattern(),
+          keyword()
+        ) ::
           Macro.t()
   def replace_all(input, pattern, replacement, opts \\ [])
 
@@ -87,6 +110,12 @@ defmodule ExAST.Patcher do
 
   # --- Core find logic ---
 
+  defp do_find_all(ast, %Selector{} = selector, opts) do
+    ast
+    |> collect_selector_matches(selector)
+    |> apply_where(opts)
+  end
+
   defp do_find_all(ast, pattern, opts) do
     matches =
       if Pattern.multi_node?(pattern) do
@@ -102,28 +131,27 @@ defmodule ExAST.Patcher do
 
   defp do_replace_all_ast(ast, pattern, replacement, opts) do
     replacement_ast = to_quoted(replacement)
-    matches = do_find_all(ast, pattern, opts)
-    matched_nodes = MapSet.new(matches, & &1.node)
+
+    matched_captures =
+      ast
+      |> do_find_all(pattern, opts)
+      |> Map.new(&{&1.node, &1.captures})
 
     Macro.prewalk(ast, fn node ->
-      maybe_replace_node(node, matched_nodes, pattern, replacement_ast)
+      maybe_replace_node(node, matched_captures, replacement_ast)
     end)
   end
 
-  defp maybe_replace_node(node, matched_nodes, pattern, replacement_ast) do
-    if MapSet.member?(matched_nodes, node) do
-      case Pattern.match(node, pattern) do
-        {:ok, captures} ->
-          captures
-          |> strip_sourceror_meta()
-          |> then(&Pattern.substitute(replacement_ast, &1))
-          |> restore_meta()
+  defp maybe_replace_node(node, matched_captures, replacement_ast) do
+    case Map.fetch(matched_captures, node) do
+      {:ok, captures} ->
+        captures
+        |> strip_sourceror_meta()
+        |> then(&Pattern.substitute(replacement_ast, &1))
+        |> restore_meta()
 
-        :error ->
-          node
-      end
-    else
-      node
+      :error ->
+        node
     end
   end
 
@@ -207,6 +235,160 @@ defmodule ExAST.Patcher do
   defp collect_ancestors_for_node(target_node, root_ast) do
     root_ast |> Zipper.zip() |> find_node_ancestors(target_node)
   end
+
+  # --- Selector matching ---
+
+  defp collect_selector_matches(root_ast, %Selector{
+         steps: [{:self, pattern} | steps],
+         filters: filters
+       }) do
+    root_ast
+    |> selector_descendants(include_self: true)
+    |> Enum.flat_map(&selector_match(&1, pattern, root_ast, %{}))
+    |> follow_selector_steps(steps, root_ast)
+    |> apply_selector_filters(filters, root_ast)
+    |> Enum.map(&selector_result/1)
+  end
+
+  defp follow_selector_steps(matches, [], _root_ast), do: matches
+
+  defp follow_selector_steps(matches, [{relation, pattern} | steps], root_ast) do
+    matches
+    |> Enum.flat_map(fn %{node: node, captures: captures} ->
+      node
+      |> selector_candidates(relation)
+      |> Enum.flat_map(&selector_match(&1, pattern, root_ast, captures))
+    end)
+    |> follow_selector_steps(steps, root_ast)
+  end
+
+  defp selector_candidates(node, :child), do: semantic_children(node)
+  defp selector_candidates(node, :descendant), do: selector_descendants(node, include_self: false)
+
+  defp selector_match(node, pattern, root_ast, captures) do
+    case Pattern.match(node, pattern) do
+      {:ok, new_captures} ->
+        case merge_captures(captures, new_captures) do
+          {:ok, captures} ->
+            [
+              %{
+                node: node,
+                range: safe_range(node),
+                captures: captures,
+                ancestors: semantic_ancestors(root_ast, node)
+              }
+            ]
+
+          :error ->
+            []
+        end
+
+      :error ->
+        []
+    end
+  end
+
+  defp apply_selector_filters(matches, filters, root_ast) do
+    Enum.filter(matches, fn match ->
+      Enum.all?(filters, &selector_filter?(match, &1, root_ast))
+    end)
+  end
+
+  defp selector_filter?(
+         match,
+         %Predicate{relation: relation, pattern: pattern, negated?: negated?},
+         root_ast
+       ) do
+    result = selector_filter?(match, relation, pattern, root_ast)
+
+    if negated? do
+      not result
+    else
+      result
+    end
+  end
+
+  defp selector_filter?(%{ancestors: [parent | _]}, :parent, pattern, _root_ast),
+    do: Pattern.match(parent, pattern) != :error
+
+  defp selector_filter?(%{ancestors: []}, :parent, _pattern, _root_ast), do: false
+
+  defp selector_filter?(%{ancestors: ancestors}, :ancestor, pattern, _root_ast),
+    do: Enum.any?(ancestors, &(Pattern.match(&1, pattern) != :error))
+
+  defp selector_filter?(%{node: node}, :has_child, pattern, _root_ast),
+    do: Enum.any?(semantic_children(node), &(Pattern.match(&1, pattern) != :error))
+
+  defp selector_filter?(%{node: node}, :has_descendant, pattern, _root_ast),
+    do:
+      node
+      |> selector_descendants(include_self: false)
+      |> Enum.any?(&(Pattern.match(&1, pattern) != :error))
+
+  defp selector_result(%{node: node, range: range, captures: captures, ancestors: ancestors}) do
+    %{node: node, range: range, captures: captures, ancestors: ancestors}
+  end
+
+  defp selector_descendants(node, opts) do
+    children = semantic_children(node)
+    descendants = Enum.flat_map(children, &selector_descendants(&1, include_self: true))
+
+    if Keyword.fetch!(opts, :include_self) do
+      [node | descendants]
+    else
+      descendants
+    end
+  end
+
+  defp semantic_ancestors(root_ast, target_node) do
+    case find_semantic_ancestors(root_ast, target_node, []) do
+      {:ok, ancestors} -> ancestors
+      nil -> []
+    end
+  end
+
+  defp find_semantic_ancestors(node, target_node, ancestors) do
+    if node == target_node do
+      {:ok, ancestors}
+    else
+      Enum.find_value(semantic_children(node), fn child ->
+        find_semantic_ancestors(child, target_node, [node | ancestors])
+      end)
+    end
+  end
+
+  defp merge_captures(left, right) do
+    Enum.reduce_while(right, {:ok, left}, fn {key, value}, {:ok, acc} ->
+      case Map.fetch(acc, key) do
+        {:ok, ^value} -> {:cont, {:ok, acc}}
+        {:ok, _other} -> {:halt, :error}
+        :error -> {:cont, {:ok, Map.put(acc, key, value)}}
+      end
+    end)
+  end
+
+  defp semantic_children({:__block__, _meta, children}) when is_list(children), do: children
+
+  defp semantic_children({_form, _meta, args}) when is_list(args) do
+    do_block_children(args) || Enum.filter(args, &ast_node?/1)
+  end
+
+  defp semantic_children({left, right}), do: Enum.filter([left, right], &ast_node?/1)
+  defp semantic_children(list) when is_list(list), do: Enum.filter(list, &ast_node?/1)
+  defp semantic_children(_), do: []
+
+  defp do_block_children(args) do
+    Enum.find_value(args, fn
+      [{_, {:__block__, _, children}}] when is_list(children) -> children
+      [{_, child}] when is_tuple(child) or is_list(child) -> List.wrap(child)
+      _ -> nil
+    end)
+  end
+
+  defp ast_node?({_form, _meta, _args}), do: true
+  defp ast_node?({_, _}), do: true
+  defp ast_node?(list) when is_list(list), do: Keyword.keyword?(list)
+  defp ast_node?(_), do: false
 
   defp find_node_ancestors(nil, _target), do: []
 

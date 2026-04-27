@@ -12,6 +12,11 @@ defmodule Mix.Tasks.ExAst.Search do
     * `--count` — only print the number of matches
     * `--inside 'pattern'` — only match inside ancestors matching this pattern
     * `--not-inside 'pattern'` — reject matches inside ancestors matching this pattern
+    * `--parent 'pattern'` / `--not-parent 'pattern'` — filter by direct semantic parent
+    * `--ancestor 'pattern'` / `--not-ancestor 'pattern'` — filter by semantic ancestor
+    * `--has-child 'pattern'` / `--not-has-child 'pattern'` — filter by direct semantic child
+    * `--has-descendant 'pattern'` / `--not-has-descendant 'pattern'` — filter by semantic descendant
+    * `--has 'pattern'` / `--not-has 'pattern'` — aliases for descendant filters
 
   ## Pattern syntax
 
@@ -31,14 +36,18 @@ defmodule Mix.Tasks.ExAst.Search do
       mix ex_ast.search --count 'dbg(_)'
       mix ex_ast.search --inside 'def handle_call(_, _, _) do _ end' 'Repo.get!(_)'
       mix ex_ast.search --not-inside 'test _ do _ end' 'IO.inspect(_)'
+      mix ex_ast.search 'IO.inspect(_)' --parent 'def _ do ... end'
+      mix ex_ast.search 'def name do ... end' --has 'Repo.transaction(_)' --not-has 'IO.inspect(_)'
   """
 
   use Mix.Task
 
+  alias ExAST.CLI.SelectorOptions
+
   @impl Mix.Task
   def run(args) do
     {opts, positional, _} =
-      OptionParser.parse(args, strict: [count: :boolean, inside: :string, not_inside: :string])
+      OptionParser.parse(args, strict: [count: :boolean] ++ SelectorOptions.switches())
 
     case positional do
       [pattern | paths] ->
@@ -53,9 +62,9 @@ defmodule Mix.Tasks.ExAst.Search do
   defp do_search(paths, pattern, opts) do
     validate_pattern!(pattern)
 
-    where_opts = Keyword.take(opts, [:inside, :not_inside])
-    Enum.each(where_opts, fn {_key, p} -> validate_pattern!(p) end)
-    results = ExAST.search(paths, pattern, where_opts)
+    search_pattern = SelectorOptions.pattern(pattern, opts, &validate_pattern!/1, [:count])
+    search_opts = SelectorOptions.where_opts(opts, [:count])
+    results = ExAST.search(paths, search_pattern, search_opts)
 
     if opts[:count] do
       IO.puts(length(results))

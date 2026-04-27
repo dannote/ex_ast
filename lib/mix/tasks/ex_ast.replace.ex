@@ -12,6 +12,11 @@ defmodule Mix.Tasks.ExAst.Replace do
     * `--dry-run` — show changes without writing files
     * `--inside 'pattern'` — only replace inside ancestors matching this pattern
     * `--not-inside 'pattern'` — skip replacements inside ancestors matching this pattern
+    * `--parent 'pattern'` / `--not-parent 'pattern'` — filter by direct semantic parent
+    * `--ancestor 'pattern'` / `--not-ancestor 'pattern'` — filter by semantic ancestor
+    * `--has-child 'pattern'` / `--not-has-child 'pattern'` — filter by direct semantic child
+    * `--has-descendant 'pattern'` / `--not-has-descendant 'pattern'` — filter by semantic descendant
+    * `--has 'pattern'` / `--not-has 'pattern'` — aliases for descendant filters
 
   ## Examples
 
@@ -19,16 +24,18 @@ defmodule Mix.Tasks.ExAst.Replace do
       mix ex_ast.replace 'dbg(expr)' 'expr'
       mix ex_ast.replace --dry-run '%Step{id: "subject"}' 'SharedSteps.subject_step(@opts)'
       mix ex_ast.replace --not-inside 'test _ do _ end' 'IO.inspect(expr)' 'expr'
+      mix ex_ast.replace 'IO.inspect(expr)' 'Logger.debug(inspect(expr))' lib/ --parent 'def _ do ... end'
+      mix ex_ast.replace 'Repo.get!(schema, id)' 'Repo.fetch!(schema, id)' lib/ --has 'Repo.transaction(_)' --not-has 'IO.inspect(_)'
   """
 
   use Mix.Task
 
+  alias ExAST.CLI.SelectorOptions
+
   @impl Mix.Task
   def run(args) do
     {opts, positional, _} =
-      OptionParser.parse(args,
-        strict: [dry_run: :boolean, inside: :string, not_inside: :string]
-      )
+      OptionParser.parse(args, strict: [dry_run: :boolean] ++ SelectorOptions.switches())
 
     case positional do
       [pattern, replacement | paths] ->
@@ -44,11 +51,14 @@ defmodule Mix.Tasks.ExAst.Replace do
     validate_syntax!(pattern, "pattern")
     validate_syntax!(replacement, "replacement")
 
-    where_opts = Keyword.take(opts, [:inside, :not_inside])
-    Enum.each(where_opts, fn {_key, p} -> validate_syntax!(p, "filter pattern") end)
+    replace_pattern =
+      SelectorOptions.pattern(pattern, opts, &validate_filter_pattern!/1, [:dry_run])
 
-    replace_opts = [{:dry_run, opts[:dry_run] || false} | where_opts]
-    results = ExAST.replace(paths, pattern, replacement, replace_opts)
+    replace_opts = [
+      {:dry_run, opts[:dry_run] || false} | SelectorOptions.where_opts(opts, [:dry_run])
+    ]
+
+    results = ExAST.replace(paths, replace_pattern, replacement, replace_opts)
 
     case results do
       [] ->
@@ -65,6 +75,8 @@ defmodule Mix.Tasks.ExAst.Replace do
         IO.puts("\n#{total} replacement(s) in #{length(files)} file(s)")
     end
   end
+
+  defp validate_filter_pattern!(code), do: validate_syntax!(code, "filter pattern")
 
   defp validate_syntax!(code, label) do
     Code.string_to_quoted!(code)

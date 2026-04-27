@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.0
+
+### Added
+
+- **CSS-like AST selectors** — build relationship-aware selectors with
+  `ExAST.Selector`:
+  ```elixir
+  import Kernel, except: [not: 1]
+  import ExAST.Selector
+
+  pattern("defmodule _ do ... end")
+  |> descendant("def _ do ... end")
+  |> child("IO.inspect(_)")
+  ```
+- **Selector predicates** — filter selected nodes with `where/2` and
+  Ecto-style `not/1`: `parent/1`, `ancestor/1`, `has_child/1`,
+  `has_descendant/1`, and `has/1`.
+- **CLI relationship filters** for `mix ex_ast.search` and
+  `mix ex_ast.replace`: `--parent`, `--ancestor`, `--has-child`,
+  `--has-descendant`, `--has`, and corresponding `--not-*` flags.
+
 ## 0.5.0
 
 ### Added
