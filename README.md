@@ -124,6 +124,16 @@ Available CLI filters:
 | `--first`, `--not-first` | First sibling |
 | `--last`, `--not-last` | Last sibling |
 | `--nth`, `--not-nth` | 1-based sibling position |
+| `--comment`, `--not-comment` | Associated leading/inside/inline comments |
+| `--comment-before`, `--comment-after` | Immediately adjacent comments |
+| `--comment-inside`, `--comment-inline` | Comments inside the selected range or on the selected line |
+
+Comment CLI values are substrings by default. Use `/.../` or `~r/.../` for regexes:
+
+```bash
+mix ex_ast.search 'def name do ... end' --comment-inside '/TODO|FIXME/'
+mix ex_ast.search 'def name do ... end' --comment-inside '/todo|fixme/i'
+```
 
 ### Query API
 
@@ -170,7 +180,25 @@ Available query functions and predicates:
 | `immediately_follows/1` / `immediately_precedes/1` | Match adjacent siblings |
 | `first/0`, `last/0`, `nth/1` | Match sibling position |
 | `any/1`, `all/1` | Combine predicates with OR/AND |
+| `comment/1` | Match associated leading/inside/inline comments |
+| `comment_before/1`, `comment_after/1` | Match immediately adjacent comments |
+| `comment_inside/1`, `comment_inline/1` | Match comments inside the selected range or on the selected line |
+| `text/2`, `exact/2`, `prefix/2`, `suffix/2` | Build comment text matchers |
 | `not/1` | Negate a predicate for `where/2` |
+
+Comment predicates accept plain strings as substring matches, regexes, or
+explicit text matchers:
+
+```elixir
+from("def _ do ... end")
+|> where(comment_inside(~r/TODO|FIXME/))
+
+from("_ = _")
+|> where(comment_inline(text("temporary", case: false)))
+
+from("defmodule _ do ... end")
+|> where(comment_before(prefix("Generated")))
+```
 
 `ExAST.Selector` remains available as the lower-level CSS-like API with
 `pattern/1`, `descendant/2`, `child/2`, `ancestor/1`, and `has_descendant/1`.

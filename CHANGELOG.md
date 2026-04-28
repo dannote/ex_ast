@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0
+
+### Added
+
+- **Comment predicates** — queries can now filter by associated source comments
+  with `comment/1`, `comment_before/1`, `comment_after/1`, `comment_inside/1`,
+  and `comment_inline/1`. Comment matchers accept strings, regexes, and explicit
+  text matchers like `prefix/2`, `suffix/2`, and `text/2`. CLI comment filters
+  detect `/.../` and `~r/.../` regex syntax.
+
 ## 0.7.0
 
 ### Added

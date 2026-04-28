@@ -25,6 +25,10 @@ defmodule Mix.Tasks.ExAst.Search do
     * `--immediately-follows 'pattern'` / `--not-immediately-follows 'pattern'` — filter by previous sibling
     * `--immediately-precedes 'pattern'` / `--not-immediately-precedes 'pattern'` — filter by next sibling
     * `--first` / `--not-first`, `--last` / `--not-last`, `--nth n` / `--not-nth n` — filter by sibling position
+    * `--comment text` / `--not-comment text` — filter by associated comments
+    * `--comment-before text`, `--comment-after text`, `--comment-inside text`, `--comment-inline text` — filter by comment location
+
+    Comment values are substrings by default. Use `/.../` or `~r/.../` for regexes, including flags like `/todo/i`.
 
   ## Pattern syntax
 
@@ -47,6 +51,8 @@ defmodule Mix.Tasks.ExAst.Search do
       mix ex_ast.search 'IO.inspect(_)' --parent 'def _ do ... end'
       mix ex_ast.search 'def name do ... end' --contains 'Repo.transaction(_)' --not-contains 'IO.inspect(...)'
       mix ex_ast.search 'Repo.delete(record)' --follows 'record = Repo.get!(_, _)'
+      mix ex_ast.search 'def name do ... end' --comment-inside TODO
+      mix ex_ast.search 'def name do ... end' --comment-inside '/TODO|FIXME/'
       mix ex_ast.search '_' lib/ --limit 100
   """
 

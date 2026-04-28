@@ -1,3 +1,14 @@
+defmodule ExAST.Selector.CommentMatcher do
+  @moduledoc """
+  Comment text matcher used by comment predicates.
+  """
+
+  defstruct [:kind, :value, case_sensitive?: true]
+
+  @type kind :: :text | :exact | :prefix | :suffix
+  @type t :: %__MODULE__{kind: kind(), value: String.t(), case_sensitive?: boolean()}
+end
+
 defmodule ExAST.Selector.Predicate do
   @moduledoc """
   Predicate used by `ExAST.Selector.where/2`.
@@ -23,6 +34,11 @@ defmodule ExAST.Selector.Predicate do
           | :first
           | :last
           | :nth
+          | :comment
+          | :comment_before
+          | :comment_after
+          | :comment_inside
+          | :comment_inline
   @type t :: %__MODULE__{
           relation: relation(),
           pattern: ExAST.Pattern.pattern() | [t()] | pos_integer() | nil,
@@ -59,6 +75,7 @@ defmodule ExAST.Selector do
       |> where(not has_descendant("IO.inspect(_)"))
   """
 
+  alias ExAST.Selector.CommentMatcher
   alias ExAST.Selector.Predicate
 
   defstruct steps: [], filters: []
@@ -195,6 +212,42 @@ defmodule ExAST.Selector do
   @spec all([Predicate.t()]) :: Predicate.t()
   def all(predicates) when is_list(predicates), do: predicate(:all, predicates)
 
+  @doc "Matches comments associated with the selected node."
+  @spec comment(String.t() | Regex.t() | CommentMatcher.t()) :: Predicate.t()
+  def comment(matcher), do: predicate(:comment, compile_comment_matcher(matcher))
+
+  @doc "Matches comments immediately before the selected node."
+  @spec comment_before(String.t() | Regex.t() | CommentMatcher.t()) :: Predicate.t()
+  def comment_before(matcher), do: predicate(:comment_before, compile_comment_matcher(matcher))
+
+  @doc "Matches comments immediately after the selected node."
+  @spec comment_after(String.t() | Regex.t() | CommentMatcher.t()) :: Predicate.t()
+  def comment_after(matcher), do: predicate(:comment_after, compile_comment_matcher(matcher))
+
+  @doc "Matches comments inside the selected node range."
+  @spec comment_inside(String.t() | Regex.t() | CommentMatcher.t()) :: Predicate.t()
+  def comment_inside(matcher), do: predicate(:comment_inside, compile_comment_matcher(matcher))
+
+  @doc "Matches inline comments on the selected node start line."
+  @spec comment_inline(String.t() | Regex.t() | CommentMatcher.t()) :: Predicate.t()
+  def comment_inline(matcher), do: predicate(:comment_inline, compile_comment_matcher(matcher))
+
+  @doc "Builds a substring comment matcher."
+  @spec text(String.t(), keyword()) :: CommentMatcher.t()
+  def text(value, opts \\ []), do: comment_matcher(:text, value, opts)
+
+  @doc "Builds an exact comment matcher."
+  @spec exact(String.t(), keyword()) :: CommentMatcher.t()
+  def exact(value, opts \\ []), do: comment_matcher(:exact, value, opts)
+
+  @doc "Builds a comment prefix matcher."
+  @spec prefix(String.t(), keyword()) :: CommentMatcher.t()
+  def prefix(value, opts \\ []), do: comment_matcher(:prefix, value, opts)
+
+  @doc "Builds a comment suffix matcher."
+  @spec suffix(String.t(), keyword()) :: CommentMatcher.t()
+  def suffix(value, opts \\ []), do: comment_matcher(:suffix, value, opts)
+
   @doc "Negates a predicate for use with `where/2`."
   @spec not Predicate.t() :: Predicate.t()
   def not (%Predicate{} = predicate), do: %{predicate | negated?: Kernel.not(predicate.negated?)}
@@ -241,6 +294,11 @@ defmodule ExAST.Selector do
     apply(__MODULE__, name, [pattern])
   end
 
+  defp build_predicate_from_ast({name, _, [matcher]})
+       when name in [:comment, :comment_before, :comment_after, :comment_inside, :comment_inline] do
+    apply(__MODULE__, name, [build_comment_matcher_from_ast(matcher)])
+  end
+
   defp build_predicate_from_ast(%Predicate{} = predicate), do: predicate
 
   defp build_predicate_from_ast(ast) do
@@ -273,8 +331,49 @@ defmodule ExAST.Selector do
     %Predicate{relation: relation, pattern: index}
   end
 
+  defp predicate(relation, %CommentMatcher{} = matcher)
+       when relation in [
+              :comment,
+              :comment_before,
+              :comment_after,
+              :comment_inside,
+              :comment_inline
+            ] do
+    %Predicate{relation: relation, pattern: matcher}
+  end
+
+  defp predicate(relation, %Regex{} = matcher)
+       when relation in [
+              :comment,
+              :comment_before,
+              :comment_after,
+              :comment_inside,
+              :comment_inline
+            ] do
+    %Predicate{relation: relation, pattern: matcher}
+  end
+
   defp predicate(relation, pattern) do
     %Predicate{relation: relation, pattern: compile_pattern(pattern)}
+  end
+
+  defp build_comment_matcher_from_ast({name, _, args})
+       when name in [:text, :exact, :prefix, :suffix] do
+    {args, _binding} = Code.eval_quoted(args)
+    apply(__MODULE__, name, args)
+  end
+
+  defp build_comment_matcher_from_ast(ast) do
+    {matcher, _binding} = Code.eval_quoted(ast)
+    matcher
+  end
+
+  defp compile_comment_matcher(%CommentMatcher{} = matcher), do: matcher
+  defp compile_comment_matcher(%Regex{} = regex), do: regex
+  defp compile_comment_matcher(value) when is_binary(value), do: text(value)
+
+  defp comment_matcher(kind, value, opts) when is_binary(value) do
+    %CommentMatcher{kind: kind, value: value, case_sensitive?: Keyword.get(opts, :case, true)}
   end
 
   defp compile_pattern(pattern) when is_binary(pattern), do: Code.string_to_quoted!(pattern)

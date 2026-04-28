@@ -20,6 +20,7 @@ defmodule ExAST.Patcher do
 
   alias ExAST.Pattern
   alias ExAST.Selector
+  alias ExAST.Selector.CommentMatcher
   alias ExAST.Selector.Predicate
   alias Sourceror.Zipper
 
@@ -47,7 +48,9 @@ defmodule ExAST.Patcher do
   def find_all(input, pattern, opts \\ [])
 
   def find_all(source, %Selector{} = selector, opts) when is_binary(source) do
-    source |> Sourceror.parse_string!() |> do_find_all(selector, opts)
+    source
+    |> Sourceror.parse_string!()
+    |> do_find_all(selector, opts, source_comments(source))
   end
 
   def find_all(source, pattern, opts) when is_binary(source) do
@@ -110,15 +113,28 @@ defmodule ExAST.Patcher do
 
   # --- Core find logic ---
 
-  defp do_find_all(ast, %Selector{} = selector, opts) do
+  defp source_comments(source) do
+    case Code.string_to_quoted_with_comments(source, columns: true) do
+      {:ok, _ast, comments} -> comments
+      _ -> []
+    end
+  rescue
+    _ -> []
+  end
+
+  defp do_find_all(ast, pattern, opts, comments \\ nil)
+
+  defp do_find_all(ast, %Selector{} = selector, opts, comments) do
     alias_env = Pattern.collect_aliases(ast)
 
     ast
     |> collect_selector_matches(selector, alias_env)
+    |> apply_selector_filters(selector.filters, ast, alias_env, comments)
+    |> Enum.map(&selector_result/1)
     |> apply_where(opts, alias_env)
   end
 
-  defp do_find_all(ast, pattern, opts) do
+  defp do_find_all(ast, pattern, opts, _comments) do
     alias_env = Pattern.collect_aliases(ast)
 
     matches =
@@ -245,8 +261,7 @@ defmodule ExAST.Patcher do
   defp collect_selector_matches(
          root_ast,
          %Selector{
-           steps: [{:self, pattern} | steps],
-           filters: filters
+           steps: [{:self, pattern} | steps]
          },
          alias_env
        ) do
@@ -254,8 +269,6 @@ defmodule ExAST.Patcher do
     |> selector_descendant_entries(include_self: true)
     |> Enum.flat_map(&selector_match(&1, pattern, root_ast, %{}, alias_env))
     |> follow_selector_steps(steps, root_ast, alias_env)
-    |> apply_selector_filters(filters, root_ast, alias_env)
-    |> Enum.map(&selector_result/1)
   end
 
   defp follow_selector_steps(matches, [], _root_ast, _alias_env), do: matches
@@ -302,9 +315,9 @@ defmodule ExAST.Patcher do
     end
   end
 
-  defp apply_selector_filters(matches, filters, root_ast, alias_env) do
+  defp apply_selector_filters(matches, filters, root_ast, alias_env, comments) do
     Enum.filter(matches, fn match ->
-      Enum.all?(filters, &selector_filter?(match, &1, root_ast, alias_env))
+      Enum.all?(filters, &selector_filter?(match, &1, root_ast, alias_env, comments))
     end)
   end
 
@@ -312,9 +325,10 @@ defmodule ExAST.Patcher do
          match,
          %Predicate{relation: relation, pattern: pattern, negated?: negated?},
          root_ast,
-         alias_env
+         alias_env,
+         comments
        ) do
-    result = selector_filter?(match, relation, pattern, root_ast, alias_env)
+    result = selector_filter?(match, relation, pattern, root_ast, alias_env, comments)
 
     if negated? do
       not result
@@ -323,67 +337,95 @@ defmodule ExAST.Patcher do
     end
   end
 
-  defp selector_filter?(match, :any, predicates, root_ast, alias_env),
-    do: Enum.any?(predicates, &selector_filter?(match, &1, root_ast, alias_env))
+  defp selector_filter?(match, :any, predicates, root_ast, alias_env, comments),
+    do: Enum.any?(predicates, &selector_filter?(match, &1, root_ast, alias_env, comments))
 
-  defp selector_filter?(match, :all, predicates, root_ast, alias_env),
-    do: Enum.all?(predicates, &selector_filter?(match, &1, root_ast, alias_env))
+  defp selector_filter?(match, :all, predicates, root_ast, alias_env, comments),
+    do: Enum.all?(predicates, &selector_filter?(match, &1, root_ast, alias_env, comments))
 
-  defp selector_filter?(%{ancestors: [parent | _]}, :parent, pattern, _root_ast, alias_env),
-    do: pattern_match(parent, pattern, alias_env) != :error
+  defp selector_filter?(
+         %{ancestors: [parent | _]},
+         :parent,
+         pattern,
+         _root_ast,
+         alias_env,
+         _comments
+       ),
+       do: pattern_match(parent, pattern, alias_env) != :error
 
-  defp selector_filter?(%{ancestors: []}, :parent, _pattern, _root_ast, _alias_env), do: false
+  defp selector_filter?(%{ancestors: []}, :parent, _pattern, _root_ast, _alias_env, _comments),
+    do: false
 
-  defp selector_filter?(%{ancestors: ancestors}, :ancestor, pattern, _root_ast, alias_env),
-    do: Enum.any?(ancestors, &(pattern_match(&1, pattern, alias_env) != :error))
+  defp selector_filter?(
+         %{ancestors: ancestors},
+         :ancestor,
+         pattern,
+         _root_ast,
+         alias_env,
+         _comments
+       ),
+       do: Enum.any?(ancestors, &(pattern_match(&1, pattern, alias_env) != :error))
 
-  defp selector_filter?(%{node: node}, :has_child, pattern, _root_ast, alias_env),
+  defp selector_filter?(%{node: node}, :has_child, pattern, _root_ast, alias_env, _comments),
     do: Enum.any?(semantic_children(node), &(pattern_match(&1, pattern, alias_env) != :error))
 
-  defp selector_filter?(%{node: node}, :has_descendant, pattern, _root_ast, alias_env),
+  defp selector_filter?(%{node: node}, :has_descendant, pattern, _root_ast, alias_env, _comments),
     do:
       node
       |> selector_descendants(include_self: false)
       |> Enum.any?(&(pattern_match(&1, pattern, alias_env) != :error))
 
-  defp selector_filter?(match, :follows, pattern, _root_ast, alias_env) do
+  defp selector_filter?(match, :follows, pattern, _root_ast, alias_env, _comments) do
     match
     |> siblings_before()
     |> Enum.any?(&(pattern_match(&1, pattern, alias_env) != :error))
   end
 
-  defp selector_filter?(match, :precedes, pattern, _root_ast, alias_env) do
+  defp selector_filter?(match, :precedes, pattern, _root_ast, alias_env, _comments) do
     match
     |> siblings_after()
     |> Enum.any?(&(pattern_match(&1, pattern, alias_env) != :error))
   end
 
-  defp selector_filter?(match, :immediately_follows, pattern, _root_ast, alias_env) do
+  defp selector_filter?(match, :immediately_follows, pattern, _root_ast, alias_env, _comments) do
     case List.last(siblings_before(match)) do
       nil -> false
       node -> pattern_match(node, pattern, alias_env) != :error
     end
   end
 
-  defp selector_filter?(match, :immediately_precedes, pattern, _root_ast, alias_env) do
+  defp selector_filter?(match, :immediately_precedes, pattern, _root_ast, alias_env, _comments) do
     case List.first(siblings_after(match)) do
       nil -> false
       node -> pattern_match(node, pattern, alias_env) != :error
     end
   end
 
-  defp selector_filter?(match, :first, _pattern, _root_ast, _alias_env),
+  defp selector_filter?(match, :first, _pattern, _root_ast, _alias_env, _comments),
     do: sibling_position(match) == 0
 
-  defp selector_filter?(match, :last, _pattern, _root_ast, _alias_env) do
+  defp selector_filter?(match, :last, _pattern, _root_ast, _alias_env, _comments) do
     case sibling_context(match) do
       {_siblings, nil} -> false
       {siblings, index} -> index == length(siblings) - 1
     end
   end
 
-  defp selector_filter?(match, :nth, index, _root_ast, _alias_env),
+  defp selector_filter?(match, :nth, index, _root_ast, _alias_env, _comments),
     do: sibling_position(match) == index - 1
+
+  defp selector_filter?(match, relation, matcher, _root_ast, _alias_env, comments)
+       when relation in [
+              :comment,
+              :comment_before,
+              :comment_after,
+              :comment_inside,
+              :comment_inline
+            ] do
+    comments
+    |> comments_for(match, relation)
+    |> Enum.any?(&comment_matches?(&1, matcher))
+  end
 
   defp pattern_match(node, {:__ex_ast_any_patterns__, patterns}, alias_env) do
     Enum.reduce_while(patterns, :error, fn pattern, :error ->
@@ -423,6 +465,105 @@ defmodule ExAST.Patcher do
   end
 
   defp sibling_context(_match), do: {[], nil}
+
+  defp comments_for(nil, _match, _relation), do: []
+
+  defp comments_for(comments, %{range: %{start: start, end: end_}}, relation)
+       when is_list(start) and is_list(end_) do
+    start_line = start[:line]
+    start_column = start[:column] || 1
+    end_line = end_[:line]
+    end_column = end_[:column] || start_column
+
+    Enum.filter(comments, fn comment ->
+      comment_in_relation?(comment, relation, start_line, start_column, end_line, end_column)
+    end)
+  end
+
+  defp comments_for(_comments, _match, _relation), do: []
+
+  defp comment_in_relation?(comment, :comment, start_line, start_column, end_line, end_column) do
+    comment_in_relation?(comment, :comment_before, start_line, start_column, end_line, end_column) or
+      comment_in_relation?(
+        comment,
+        :comment_inside,
+        start_line,
+        start_column,
+        end_line,
+        end_column
+      ) or
+      comment_in_relation?(
+        comment,
+        :comment_inline,
+        start_line,
+        start_column,
+        end_line,
+        end_column
+      )
+  end
+
+  defp comment_in_relation?(
+         comment,
+         :comment_before,
+         start_line,
+         _start_column,
+         _end_line,
+         _end_column
+       ),
+       do: comment.line < start_line and comment.line + comment.next_eol_count == start_line
+
+  defp comment_in_relation?(
+         comment,
+         :comment_after,
+         _start_line,
+         _start_column,
+         end_line,
+         _end_column
+       ),
+       do: comment.line > end_line and comment.line - comment.previous_eol_count == end_line
+
+  defp comment_in_relation?(
+         comment,
+         :comment_inside,
+         start_line,
+         _start_column,
+         end_line,
+         _end_column
+       ),
+       do: comment.line >= start_line and comment.line <= end_line
+
+  defp comment_in_relation?(
+         comment,
+         :comment_inline,
+         start_line,
+         _start_column,
+         end_line,
+         end_column
+       ),
+       do: start_line == end_line and comment.line == start_line and comment.column >= end_column
+
+  defp comment_matches?(comment, matcher), do: do_comment_matches?(comment_text(comment), matcher)
+
+  defp do_comment_matches?(text, %Regex{} = regex), do: Regex.match?(regex, text)
+
+  defp do_comment_matches?(text, %CommentMatcher{kind: kind, value: value, case_sensitive?: case?}) do
+    {text, value} = normalize_comment_case(text, value, case?)
+
+    case kind do
+      :text -> String.contains?(text, value)
+      :exact -> text == value
+      :prefix -> String.starts_with?(text, value)
+      :suffix -> String.ends_with?(text, value)
+    end
+  end
+
+  defp normalize_comment_case(text, value, true), do: {text, value}
+
+  defp normalize_comment_case(text, value, false),
+    do: {String.downcase(text), String.downcase(value)}
+
+  defp comment_text(%{text: "#" <> text}), do: String.trim_leading(text)
+  defp comment_text(%{text: text}), do: text
 
   defp selector_result(%{node: node, range: range, captures: captures, ancestors: ancestors}) do
     %{node: node, range: range, captures: captures, ancestors: ancestors}

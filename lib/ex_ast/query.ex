@@ -76,4 +76,35 @@ defmodule ExAST.Query do
 
   @doc "Matches when all nested predicates match."
   defdelegate all(predicates), to: Selector
+
+  @doc "Matches comments associated with the selected node."
+  defdelegate comment(matcher), to: Selector
+
+  @doc "Matches comments immediately before the selected node."
+  defdelegate comment_before(matcher), to: Selector
+
+  @doc "Matches comments immediately after the selected node."
+  defdelegate comment_after(matcher), to: Selector
+
+  @doc "Matches comments inside the selected node range."
+  defdelegate comment_inside(matcher), to: Selector
+
+  @doc "Matches inline comments on the selected node start line."
+  defdelegate comment_inline(matcher), to: Selector
+
+  @doc "Builds a substring comment matcher."
+  defdelegate text(value), to: Selector
+  defdelegate text(value, opts), to: Selector
+
+  @doc "Builds an exact comment matcher."
+  defdelegate exact(value), to: Selector
+  defdelegate exact(value, opts), to: Selector
+
+  @doc "Builds a comment prefix matcher."
+  defdelegate prefix(value), to: Selector
+  defdelegate prefix(value, opts), to: Selector
+
+  @doc "Builds a comment suffix matcher."
+  defdelegate suffix(value), to: Selector
+  defdelegate suffix(value, opts), to: Selector
 end

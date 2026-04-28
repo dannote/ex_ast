@@ -23,6 +23,10 @@ defmodule Mix.Tasks.ExAst.Replace do
     * `--immediately-follows 'pattern'` / `--not-immediately-follows 'pattern'` — filter by previous sibling
     * `--immediately-precedes 'pattern'` / `--not-immediately-precedes 'pattern'` — filter by next sibling
     * `--first` / `--not-first`, `--last` / `--not-last`, `--nth n` / `--not-nth n` — filter by sibling position
+    * `--comment text` / `--not-comment text` — filter by associated comments
+    * `--comment-before text`, `--comment-after text`, `--comment-inside text`, `--comment-inline text` — filter by comment location
+
+    Comment values are substrings by default. Use `/.../` or `~r/.../` for regexes, including flags like `/todo/i`.
 
   ## Examples
 
@@ -33,6 +37,8 @@ defmodule Mix.Tasks.ExAst.Replace do
       mix ex_ast.replace 'IO.inspect(expr)' 'Logger.debug(inspect(expr))' lib/ --parent 'def _ do ... end'
       mix ex_ast.replace 'Repo.get!(schema, id)' 'Repo.fetch!(schema, id)' lib/ --contains 'Repo.transaction(_)' --not-contains 'IO.inspect(...)'
       mix ex_ast.replace 'Logger.debug(record)' 'Logger.info(record)' lib/ --immediately-precedes 'Repo.delete(record)'
+      mix ex_ast.replace 'IO.inspect(expr)' 'dbg(expr)' lib/ --comment-inline temporary
+      mix ex_ast.replace 'IO.inspect(expr)' 'dbg(expr)' lib/ --comment-inline '/temporary|debug/i'
   """
 
   use Mix.Task

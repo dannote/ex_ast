@@ -31,7 +31,17 @@ defmodule ExAST.CLI.SelectorOptions do
     last: :boolean,
     not_last: :boolean,
     nth: :integer,
-    not_nth: :integer
+    not_nth: :integer,
+    comment: :string,
+    not_comment: :string,
+    comment_before: :string,
+    not_comment_before: :string,
+    comment_after: :string,
+    not_comment_after: :string,
+    comment_inside: :string,
+    not_comment_inside: :string,
+    comment_inline: :string,
+    not_comment_inline: :string
   ]
 
   @negated_filters [
@@ -48,7 +58,12 @@ defmodule ExAST.CLI.SelectorOptions do
     :not_immediately_precedes,
     :not_first,
     :not_last,
-    :not_nth
+    :not_nth,
+    :not_comment,
+    :not_comment_before,
+    :not_comment_after,
+    :not_comment_inside,
+    :not_comment_inline
   ]
 
   def switches, do: @switches
@@ -93,8 +108,12 @@ defmodule ExAST.CLI.SelectorOptions do
     end)
   end
 
-  defp validate_filter_value!(_key, pattern, validate_filter!) when is_binary(pattern) do
-    validate_filter!.(pattern)
+  defp validate_filter_value!(key, pattern, validate_filter!) when is_binary(pattern) do
+    if comment_filter?(key) do
+      parse_comment_matcher!(pattern)
+    else
+      validate_filter!.(pattern)
+    end
   end
 
   defp validate_filter_value!(key, value, _validate_filter!)
@@ -148,4 +167,70 @@ defmodule ExAST.CLI.SelectorOptions do
   defp selector_predicate(key, true) when key in [:first, :not_first], do: Selector.first()
   defp selector_predicate(key, true) when key in [:last, :not_last], do: Selector.last()
   defp selector_predicate(key, index) when key in [:nth, :not_nth], do: Selector.nth(index)
+
+  defp selector_predicate(key, text) when key in [:comment, :not_comment],
+    do: Selector.comment(parse_comment_matcher!(text))
+
+  defp selector_predicate(key, text) when key in [:comment_before, :not_comment_before],
+    do: Selector.comment_before(parse_comment_matcher!(text))
+
+  defp selector_predicate(key, text) when key in [:comment_after, :not_comment_after],
+    do: Selector.comment_after(parse_comment_matcher!(text))
+
+  defp selector_predicate(key, text) when key in [:comment_inside, :not_comment_inside],
+    do: Selector.comment_inside(parse_comment_matcher!(text))
+
+  defp selector_predicate(key, text) when key in [:comment_inline, :not_comment_inline],
+    do: Selector.comment_inline(parse_comment_matcher!(text))
+
+  defp comment_filter?(key), do: key in comment_filters()
+
+  defp comment_filters do
+    [
+      :comment,
+      :not_comment,
+      :comment_before,
+      :not_comment_before,
+      :comment_after,
+      :not_comment_after,
+      :comment_inside,
+      :not_comment_inside,
+      :comment_inline,
+      :not_comment_inline
+    ]
+  end
+
+  defp parse_comment_matcher!("~r/" <> rest), do: compile_comment_regex!(rest)
+  defp parse_comment_matcher!("/" <> rest), do: compile_comment_regex!(rest)
+  defp parse_comment_matcher!(text), do: text
+
+  defp compile_comment_regex!(rest) do
+    case split_comment_regex(rest) do
+      {pattern, flags} -> Regex.compile!(pattern, flags)
+      :error -> "/" <> rest
+    end
+  end
+
+  defp split_comment_regex(rest) do
+    case last_unescaped_slash(rest) do
+      nil -> :error
+      index -> String.split_at(rest, index)
+    end
+    |> case do
+      {pattern, "/" <> flags} -> {pattern, flags}
+      other -> other
+    end
+  end
+
+  defp last_unescaped_slash(rest) do
+    rest
+    |> String.graphemes()
+    |> Enum.with_index()
+    |> Enum.reduce({nil, false}, fn
+      {"/", index}, {_last, false} -> {index, false}
+      {"\\", _index}, {last, false} -> {last, true}
+      {_char, _index}, {last, _escaped?} -> {last, false}
+    end)
+    |> elem(0)
+  end
 end

@@ -139,6 +139,81 @@ defmodule Mix.Tasks.ExAstCliTest do
     end
 
     @tag :tmp_dir
+    test "filters with comment flags", %{tmp_dir: dir} do
+      file = Path.join(dir, "sample.ex")
+
+      File.write!(file, """
+      def keep do
+        # TODO: migrate
+        :ok
+      end
+
+      def skip do
+        :ok
+      end
+      """)
+
+      output =
+        capture_io(fn ->
+          Mix.Task.run("ex_ast.search", [
+            "def name do ... end",
+            file,
+            "--comment-inside",
+            "TODO"
+          ])
+        end)
+
+      assert output =~ "name: keep"
+      refute output =~ "name: skip"
+    end
+
+    @tag :tmp_dir
+    test "detects regex syntax in comment flags", %{tmp_dir: dir} do
+      file = Path.join(dir, "sample.ex")
+
+      File.write!(file, """
+      def keep do
+        # FIXME: migrate
+        :ok
+      end
+
+      def also_keep do
+        value = 1 # debug temporary
+      end
+
+      def skip do
+        # note
+        :ok
+      end
+      """)
+
+      output =
+        capture_io(fn ->
+          Mix.Task.run("ex_ast.search", [
+            "def name do ... end",
+            file,
+            "--comment-inside",
+            "/todo|fixme/i"
+          ])
+        end)
+
+      assert output =~ "name: keep"
+      refute output =~ "name: skip"
+
+      output =
+        capture_io(fn ->
+          Mix.Task.rerun("ex_ast.search", [
+            "value = 1",
+            file,
+            "--comment-inline",
+            "~r/temporary|debug/"
+          ])
+        end)
+
+      assert output =~ "value = 1"
+    end
+
+    @tag :tmp_dir
     test "allows broad search with limit", %{tmp_dir: dir} do
       file = Path.join(dir, "sample.ex")
       File.write!(file, "defmodule A do\n  def run, do: :ok\nend\n")
