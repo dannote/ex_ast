@@ -45,6 +45,7 @@ defmodule ExAST.MixProject do
       extras: [
         "README.md",
         "CHANGELOG.md",
+        "LICENSE",
         "guides/getting-started.md",
         "guides/pattern-language.md",
         "guides/querying.md",
