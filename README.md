@@ -11,6 +11,35 @@ mix ex_ast.replace 'IO.inspect(expr, _)' 'Logger.debug(inspect(expr))' lib/
 mix ex_ast.diff lib/old.ex lib/new.ex
 ```
 
+## Why
+
+Regex can't tell `IO.inspect(data)` from `IO.inspect(data, label: "debug")`.
+Text diff doesn't know a function moved vs changed. ExAST works on the AST —
+patterns match structure, not strings.
+
+## Quick examples
+
+```elixir
+# Negative literals — flag potential bugs
+ExAST.Patcher.find_all(source, "Enum.take(_, -_)")
+
+# Always-true comparisons
+ExAST.Patcher.find_all(source, "{a, a}")
+
+# Compile-time config reads
+ExAST.Patcher.find_all(source, "@name Application.get_env(_, _)")
+
+# Specific atom values
+import ExAST.Query
+from("def handle_event(event, _, _) do ... end")
+|> where(^event == :click or ^event == :keydown)
+
+# Functions with transaction but no debug output
+from("def _ do ... end")
+|> where(contains("Repo.transaction(_)"))
+|> where(not contains("IO.inspect(...)"))
+```
+
 ## Installation
 
 ```elixir
@@ -19,387 +48,16 @@ def deps do
 end
 ```
 
-## Pattern syntax
-
-Patterns are valid Elixir expressions, given as strings or `quote` blocks.
-Three rules:
-
-| Syntax | Meaning |
-|--------|---------|
-| `_` or `_name` | Wildcard — matches any node, not captured |
-| `name`, `expr`, `x` | Capture — matches any node, bound by name |
-| `...` | Ellipsis — matches zero or more nodes (args, list items, block body) |
-| Everything else | Literal — must match exactly |
-
-Structs and maps match **partially** — only the keys you write must be
-present. `%User{role: r}` matches any `User` with a `role` field,
-regardless of other fields.
-
-Repeated variable names require the same value at every position:
-`Enum.map(a, a)` only matches calls where both arguments are identical.
-
-### Pipe awareness
-
-Pipes are desugared before matching — `data |> Enum.map(f)` and
-`Enum.map(data, f)` are treated as equivalent. You can write the
-pattern in either form and it will match both:
-
-```bash
-# Matches both `Enum.map(data, f)` and `data |> Enum.map(f)`
-mix ex_ast.search 'Enum.map(_, _)'
-```
-
-### Multi-node patterns
-
-Separate statements with `;` to match contiguous sequences within a block:
-
-```bash
-# Find get-then-delete patterns
-mix ex_ast.search 'a = Repo.get!(_, _); Repo.delete(a)'
-
-# Captures are consistent across statements —
-# `a` must refer to the same variable in both
-```
-
-### CLI relationship filters
-
-Filter matches by their surrounding context with `--inside` and `--not-inside`:
-
-```bash
-# Only inside private functions
-mix ex_ast.search --inside 'defp _ do _ end' 'Repo.get!(_, _)'
-
-# Exclude test blocks
-mix ex_ast.search --not-inside 'test _ do _ end' 'IO.inspect(_)'
-
-# Both at once
-mix ex_ast.search --inside 'def _ do _ end' --not-inside 'if _ do _ end' 'IO.inspect(_)'
-```
-
-Search and replace also support CSS-like relationship predicates:
-
-```bash
-# Direct semantic parent only — excludes nested calls inside if/case/fn blocks
-mix ex_ast.search 'IO.inspect(expr)' --parent 'def _ do ... end'
-
-# Any semantic ancestor
-mix ex_ast.search 'IO.inspect(expr)' --ancestor 'def _ do ... end'
-
-# Find functions that contain a transaction but no debug output
-mix ex_ast.search 'def name do ... end' \
-  --contains 'Repo.transaction(_)' \
-  --not-contains 'IO.inspect(...)'
-
-# Find calls that follow an earlier statement in the same block
-mix ex_ast.search 'Repo.delete(record)' --follows 'record = Repo.get!(_, _)'
-
-# Limit broad searches
-mix ex_ast.search '_' lib/ --limit 100
-
-# Replace only direct function-body debug calls
-mix ex_ast.replace 'IO.inspect(expr)' 'Logger.debug(inspect(expr))' lib/ \
-  --parent 'def _ do ... end'
-
-# Replace calls only in functions matching broader context predicates
-mix ex_ast.replace 'Repo.get!(schema, id)' 'Repo.fetch!(schema, id)' lib/ \
-  --ancestor 'def _ do ... end' \
-  --not-ancestor 'test _ do ... end'
-```
-
-Available CLI filters:
-
-| Flag | Meaning |
-|------|---------|
-| `--parent`, `--not-parent` | Direct semantic parent |
-| `--ancestor`, `--not-ancestor` | Any semantic ancestor |
-| `--inside`, `--not-inside` | Aliases for ancestor filters |
-| `--has-child`, `--not-has-child` | Direct semantic child |
-| `--contains`, `--not-contains` | Any semantic descendant |
-| `--has-descendant`, `--not-has-descendant` | Aliases for contains filters |
-| `--has`, `--not-has` | Aliases for contains filters |
-| `--follows`, `--not-follows` | Previous sibling in the same block |
-| `--precedes`, `--not-precedes` | Following sibling in the same block |
-| `--immediately-follows`, `--not-immediately-follows` | Immediately previous sibling |
-| `--immediately-precedes`, `--not-immediately-precedes` | Immediately following sibling |
-| `--first`, `--not-first` | First sibling |
-| `--last`, `--not-last` | Last sibling |
-| `--nth`, `--not-nth` | 1-based sibling position |
-| `--comment`, `--not-comment` | Associated leading/inside/inline comments |
-| `--comment-before`, `--comment-after` | Immediately adjacent comments |
-| `--comment-inside`, `--comment-inline` | Comments inside the selected range or on the selected line |
-
-Comment CLI values are substrings by default. Use `/.../` or `~r/.../` for regexes:
-
-```bash
-mix ex_ast.search 'def name do ... end' --comment-inside '/TODO|FIXME/'
-mix ex_ast.search 'def name do ... end' --comment-inside '/todo|fixme/i'
-```
-
-### Query API
-
-Use `ExAST.Query` when a match depends on AST relationships:
-
-```elixir
-import ExAST.Query
-
-query =
-  from("def _ do ... end")
-  |> where(contains("Repo.transaction(_)"))
-  |> where(not contains("IO.inspect(...)"))
-
-ExAST.search("lib/", query)
-```
-
-Queries select nodes with `from/1`, move through the tree with `find/2` and
-`find_child/2`, and filter the current selection with `where/2` predicates.
-`where/2` accepts predicate expressions and rewrites `not(...)` the way an
-Ecto-style DSL would, so you can use bare `not(...)` directly.
-
-```elixir
-import ExAST.Query
-
-query =
-  from("IO.inspect(value)")
-  |> where(inside("def _ do ... end"))
-  |> where(not parent("if _ do ... end"))
-```
-
-Available query functions and predicates:
-
-| Function | Meaning |
-|----------|---------|
-| `from/1` | Start from one pattern, or a list of alternative patterns |
-| `find/2` | Select nested descendants matching the pattern |
-| `find_child/2` | Select direct semantic children matching the pattern |
-| `where/2` | Add a predicate filter without changing the selected node |
-| `contains/1` | Match a nested descendant predicate |
-| `has_child/1` | Match a direct semantic child predicate |
-| `inside/1` | Match a semantic ancestor predicate |
-| `parent/1` | Match a direct semantic parent predicate |
-| `follows/1` / `precedes/1` | Match previous/following siblings in the same block |
-| `immediately_follows/1` / `immediately_precedes/1` | Match adjacent siblings |
-| `first/0`, `last/0`, `nth/1` | Match sibling position |
-| `any/1`, `all/1` | Combine predicates with OR/AND |
-| `comment/1` | Match associated leading/inside/inline comments |
-| `comment_before/1`, `comment_after/1` | Match immediately adjacent comments |
-| `comment_inside/1`, `comment_inline/1` | Match comments inside the selected range or on the selected line |
-| `text/2`, `exact/2`, `prefix/2`, `suffix/2` | Build comment text matchers |
-| `not/1` | Negate a predicate for `where/2` |
-
-Comment predicates accept plain strings as substring matches, regexes, or
-explicit text matchers:
-
-```elixir
-from("def _ do ... end")
-|> where(comment_inside(~r/TODO|FIXME/))
-
-from("_ = _")
-|> where(comment_inline(text("temporary", case: false)))
-
-from("defmodule _ do ... end")
-|> where(comment_before(prefix("Generated")))
-```
-
-`ExAST.Selector` remains available as the lower-level CSS-like API with
-`pattern/1`, `descendant/2`, `child/2`, `ancestor/1`, and `has_descendant/1`.
-
-### Capture guards
-
-Use `^` inside `where/2` to filter on captured values, similar to Ecto's
-pin syntax:
-
-```elixir
-import ExAST.Query
-
-# Only negative literals
-from("Enum.take(_, count)")
-|> where(match?({:-, _, [_]}, ^count))
-
-# Specific atom values
-from("def handle_event(event, _, _) do ... end")
-|> where(^event == :click or ^event == :keydown)
-
-# Multi-capture comparison
-from("left == right")
-|> where(^left == ^right)
-```
-
-Any Elixir expression works inside `where` — `match?/2`, comparisons,
-arithmetic, function calls. The `^name` references are replaced with the
-corresponding captured AST node at match time.
-
-Broad queries like `from("_")` match every AST node. Project-wide searches refuse
-those unless you pass a `limit` or explicitly opt in with `allow_broad: true`:
-
-```elixir
-ExAST.search("lib/", from("_"), limit: 100)
-ExAST.search("lib/", from("_"), allow_broad: true)
-```
-
-## Examples
-
-### Search
-
-```bash
-# Find all IO.inspect calls (any arity)
-mix ex_ast.search 'IO.inspect(_)'
-mix ex_ast.search 'IO.inspect(_, _)'
-
-# Find structs by field value
-mix ex_ast.search '%Step{id: "subject"}' lib/documents/
-
-# Find {:error, _} tuples
-mix ex_ast.search '{:error, _}' lib/ test/
-
-# Find GenServer callbacks
-mix ex_ast.search 'def handle_call(_, _, _) do _ end'
-
-# Count matches
-mix ex_ast.search --count 'dbg(_)'
-
-# Find piped calls (matches both piped and direct)
-mix ex_ast.search 'Enum.map(_, _)'
-
-# Find get-then-delete across sequential statements
-mix ex_ast.search 'a = Repo.get!(_, _); Repo.delete(a)'
-
-# Only inside private functions
-mix ex_ast.search --inside 'defp _ do _ end' 'Repo.get!(_, _)'
-```
-
-### Replace
-
-```bash
-# Remove debug calls
-mix ex_ast.replace 'dbg(expr)' 'expr'
-mix ex_ast.replace 'IO.inspect(expr, _)' 'expr'
-
-# Replace struct with function call
-mix ex_ast.replace '%Step{id: "subject"}' 'SharedSteps.subject_step(@opts)' lib/types/
-
-# Migrate API
-mix ex_ast.replace 'Repo.get!(mod, id)' 'Repo.get!(mod, id) || raise NotFoundError'
-
-# Preview without writing
-mix ex_ast.replace --dry-run 'use Mix.Config' 'import Config'
-
-# Only replace outside tests
-mix ex_ast.replace --not-inside 'test _ do _ end' 'IO.inspect(expr)' 'expr'
-```
-
-Captures from the pattern are substituted into the replacement by name.
-
-### Diff
-
-Syntax-aware diff between two Elixir files. Unlike text-based diffs,
-it understands Elixir structure — functions are matched by name and
-arity, reorders are reported as moves, and changes are classified by
-kind (function, call, map, keyword, assignment).
-
-```bash
-# Compare two files
-mix ex_ast.diff lib/old.ex lib/new.ex
-
-# Only print summary lines
-mix ex_ast.diff --summary lib/old.ex lib/new.ex
-
-# Disable move detection
-mix ex_ast.diff --no-moves lib/old.ex lib/new.ex
-
-# Print edits as Elixir terms
-mix ex_ast.diff --json lib/old.ex lib/new.ex
-```
-
-Example output:
-
-```
-lib/old.ex ↔ lib/new.ex
-
-L2 MOVE moved function def first/0
-
-L3 MOVE moved function def second/0
-
-L2 UPDATE updated function def first/0
-  - def first, do: 1
-  + def first, do: 10
-
-L5 INSERT inserted function def fourth/0
-  + def fourth, do: 4
-
-4 edit(s)
-```
-
-What it detects:
-
-- **Function updates** — body or guard changes, with old/new source
-- **Function inserts/deletes** — matched by `{name, arity}`
-- **Function reorders** — reported as `:move` edits
-- **Call updates** — local and remote calls matched by name/arity
-- **Map/struct/keyword changes** — key-based matching
-- **Pipeline changes** — pipes are normalized, stages matched individually
-- **Assignments** — `=` bindings tracked as distinct semantic nodes
-
-### Programmatic API
-
-```elixir
-# Search
-ExAST.search("lib/", "IO.inspect(_)")
-#=> [%{file: "lib/worker.ex", line: 12, source: "IO.inspect(data)", captures: %{}}]
-
-# Patcher.find_all now includes matched source text
-ExAST.Patcher.find_all(source_code, "IO.inspect(_)")
-#=> [%{node: ..., range: ..., captures: %{}, source: "IO.inspect(data)"}]
-
-# Search with where conditions
-ExAST.search("lib/", "Repo.get!(_, _)", inside: "defp _ do _ end")
-
-# Replace
-ExAST.replace("lib/", "dbg(expr)", "expr")
-#=> [{"lib/worker.ex", 2}]
-
-# Replace with context filter
-ExAST.replace("lib/", "IO.inspect(expr)", "expr", not_inside: "test _ do _ end")
-
-# Low-level: source string
-ExAST.Patcher.find_all(source_code, "IO.inspect(_)")
-ExAST.Patcher.find_all(source_code, "IO.inspect(_)", inside: "def _ do _ end")
-ExAST.Patcher.replace_all(source_code, "dbg(expr)", "expr")
-
-# Low-level: AST or zipper (returns AST instead of string)
-ast = Sourceror.parse_string!(source_code)
-ExAST.Patcher.find_all(ast, "IO.inspect(_)")
-ExAST.Patcher.replace_all(ast, "IO.inspect(expr)", "dbg(expr)")  #=> Macro.t()
-
-zipper = Sourceror.Zipper.zip(ast)
-ExAST.Patcher.find_all(zipper, "IO.inspect(_)")
-
-# Quoted expressions instead of strings
-ExAST.Patcher.find_all(source_code, quote(do: IO.inspect(_)))
-ExAST.Patcher.replace_all(ast, quote(do: IO.inspect(expr)), quote(do: dbg(expr)))
-
-# ~p sigil for compile-time pattern parsing
-import ExAST.Sigil
-ExAST.Patcher.find_all(source_code, ~p"IO.inspect(...)")
-
-# Syntax-aware diff
-result = ExAST.diff(old_source, new_source)
-result.edits
-#=> [%ExAST.Diff.Edit{op: :update, kind: :function, summary: "...", ...}]
-
-result = ExAST.diff(old_source, new_source, include_moves: false)
-ExAST.diff_files("lib/old.ex", "lib/new.ex")
-```
-
-Each edit is an `%ExAST.Diff.Edit{}` struct with:
-
-| Field | Description |
-|-------|-------------|
-| `op` | `:insert`, `:delete`, `:update`, or `:move` |
-| `kind` | `:function`, `:call`, `:remote_call`, `:map`, `:struct`, `:keyword`, `:assignment`, `:module` |
-| `summary` | Human-readable description |
-| `old_range` / `new_range` | Source positions (`%Sourceror.Range{}`) |
-| `old_id` / `new_id` | Internal node IDs from the annotated tree |
-| `meta` | `%{old: "...", new: "..."}` with rendered source for updates |
+## Documentation
+
+| Guide | Content |
+|-------|---------|
+| [Getting Started](https://hexdocs.pm/ex_ast/getting-started.html) | Install, first search, first replace |
+| [Pattern Language](https://hexdocs.pm/ex_ast/pattern-language.html) | Syntax, wildcards, captures, ellipsis, pipes, recipes |
+| [Querying](https://hexdocs.pm/ex_ast/querying.html) | Relationship filters, selectors, capture guards |
+| [CLI Reference](https://hexdocs.pm/ex_ast/cli.html) | Command-line flags and usage |
+| [Diff](https://hexdocs.pm/ex_ast/diff.html) | Syntax-aware code diffing |
+| [API Reference](https://hexdocs.pm/ex_ast/api-reference.html) | Module documentation |
 
 ## What you can match
 
@@ -407,122 +65,36 @@ Each edit is an `%ExAST.Diff.Edit{}` struct with:
 # Function calls (any arity with ...)
 Enum.map(_, _)
 Logger.info(...)
-Repo.all(_)
 
 # Definitions
 def handle_call(msg, _, state) do _ end
-def mount(_, _, _) do _ end
 
-# Pipes (normalized — matches both forms)
-_ |> Repo.all()
+# Pipes (matches both forms)
 Enum.map(data, f)           # also matches: data |> Enum.map(f)
 
 # Multi-node sequences
 a = Repo.get!(_, _); Repo.delete(a)
-x = compute(_); Logger.info(x)
 
-# Tuples
+# Tuples, structs, maps
 {:ok, result}
-{:error, reason}
-{:noreply, state}
-
-# Structs (partial match)
 %User{role: :admin}
-%Changeset{valid?: false}
-
-# Maps (partial match)
 %{name: name}
 
-# Directives
+# Directives and attributes
 use GenServer
-import Ecto.Query
-alias MyApp.Accounts.User
-
-# Module attributes (name is captureable)
 @env Application.get_env(_, _)
-@behaviour mod
-@impl true
-
-# Ecto
-from(_ in _, _)
-cast(_, _)
-validate_required(_)
 
 # Control flow
 case _ do _ -> _ end
-with {:ok, _} <- _ do _ end
 fn _ -> _ end
-&_/1
-
-# Misc
-raise _
-dbg(_)
 ```
 
 ## Limitations
 
-- **No function-name wildcards** — `def _(_) do _ end` won't match
-  arbitrary function names because `_` in that position parses as a call,
-  not a wildcard. Use the actual name or match the `do` block.
-- **Alias expansion is local syntax-aware, not semantic** — `alias AshPhoenix.Form`
-  lets `Form.for_update(...)` match `AshPhoenix.Form.for_update(...)` within the
-  same matched AST, but ExAST does not expand macros or resolve imports the way
-  the compiler does.
-- **Exact list length** — `[a, b]` only matches two-element lists. Use
-  `[a, b, ...]` to match two-or-more, or `[...]` for any length.
-- **No multi-expression wildcards in sequences** — `...` matches a
-  block body but can't be used inside `;`-separated multi-node patterns.
-- **Multi-node requires contiguity** — `a = Repo.get!(_, _); Repo.delete(a)`
-  only matches when the two statements are adjacent. Intervening statements
-  break the match.
-- **Replacement formatting** — the replacement string is rendered by
-  `Macro.to_string/1`. Run `mix format` afterward for consistent style.
-- **Diff is structural, not semantic** — macros are not expanded.
-  Moves are only detected for functions within the same module body.
-
-## How it works
-
-### Search & Replace
-
-1. Source files are parsed with [Sourceror](https://hex.pm/packages/sourceror),
-   preserving source positions and comments
-2. The pattern string is parsed with `Code.string_to_quoted!/1`
-3. Both ASTs are normalized (metadata stripped, `__block__` wrappers removed,
-   pipes desugared)
-4. The pattern is matched against every node via depth-first traversal using
-   `Sourceror.Zipper`
-5. Variables in the pattern bind to the matched subtrees (captures)
-6. For multi-node patterns, block bodies are scanned for contiguous
-   subsequences matching all pattern statements with consistent captures
-7. Where conditions (`inside`/`not_inside`) filter matches by checking
-   whether any ancestor node matches the given pattern
-8. For replacements, captures are substituted into the replacement template
-   and the result is patched into the original source using
-   `Sourceror.patch_string/2`, preserving formatting of unchanged code
-
-### Diff
-
-1. Both source strings are parsed with Sourceror and annotated into
-   a tree of nodes, each with a stable ID, kind, label, normalized hash,
-   source range, and parent/child relationships
-2. **Anchor phase** — functions are matched by `{name, arity}` across
-   trees; their parent container nodes are mapped transitively; the root
-   nodes are always mapped
-3. **Semantic matching** — remaining unmatched nodes are scored by kind,
-   label, signature, parent mapping, and subtree size similarity, then
-   greedily matched to the best candidate
-4. **Child recovery** — keyed children (map fields, keyword entries)
-   are matched by key; ordered children under modules/functions are matched
-   by compatibility
-5. **Classification** — each mapping pair is checked for content changes
-   (hash mismatch → `:update`); unmatched left nodes → `:delete`;
-   unmatched right nodes → `:insert`; matched functions whose sibling
-   order changed → `:move`
-6. Edits are sorted by source position and deduplicated
-
-The algorithm is inspired by [GumTree](https://github.com/GumTreeDiff/gumtree),
-adapted for Elixir's specific AST shape — `do` blocks, keyword lists,
-pipe normalization, and Sourceror's comment-preserving metadata.
+- No function-name wildcards — `def _(_)` won't match arbitrary names
+- Alias expansion is syntax-aware, not semantic — no macro expansion
+- Multi-node patterns require contiguous statements
+- Replacement formatting uses `Macro.to_string/1` — run `mix format` after
 
 ## License
 

@@ -41,7 +41,19 @@ defmodule ExAST.MixProject do
   defp docs do
     [
       main: "readme",
-      extras: ["README.md", "LICENSE"]
+      source_ref: "v#{@version}",
+      extras: [
+        "README.md",
+        "CHANGELOG.md",
+        "guides/getting-started.md",
+        "guides/pattern-language.md",
+        "guides/querying.md",
+        "guides/cli.md",
+        "guides/diff.md"
+      ],
+      groups_for_extras: [
+        Guides: ~r/guides\//
+      ]
     ]
   end
 
