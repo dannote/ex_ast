@@ -29,6 +29,12 @@ ExAST.Patcher.find_all(source, "{a, a}")
 # Compile-time config reads
 ExAST.Patcher.find_all(source, "@name Application.get_env(_, _)")
 
+# Batch analyzer checks in one scan
+ExAST.Patcher.find_many(source,
+  get_env: "@_ Application.get_env(_, _)",
+  dbg_call: "dbg(expr)"
+)
+
 # Specific atom values
 import ExAST.Query
 from("def handle_event(event, _, _) do ... end")

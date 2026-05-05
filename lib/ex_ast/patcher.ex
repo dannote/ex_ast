@@ -31,6 +31,10 @@ defmodule ExAST.Patcher do
           source: String.t() | nil
         }
 
+  @type pattern_name :: term()
+  @type named_pattern :: {pattern_name(), Pattern.pattern() | Selector.t()}
+  @type tagged_match :: %{required(:pattern) => pattern_name(), optional(atom()) => term()}
+
   @doc """
   Finds all occurrences of `pattern`.
 
@@ -84,6 +88,60 @@ defmodule ExAST.Patcher do
 
   def find_all(ast, pattern, opts) do
     do_find_all(ast, pattern, opts, nil, nil)
+  end
+
+  @doc """
+  Finds matches for multiple named patterns in a single pass where possible.
+
+  `patterns` may be a keyword list or a map. Returned matches include a
+  `:pattern` field with the matching pattern name:
+
+      Patcher.find_many(source,
+        inspect_call: "IO.inspect(expr)",
+        debug_call: "dbg(expr)"
+      )
+
+  This is useful for analyzers that run many independent pattern checks over
+  the same source tree. Single-node patterns are compiled once and scanned
+  together; selectors and multi-node sequence patterns fall back to the regular
+  matcher while keeping the same tagged result shape.
+  """
+  @spec find_many(
+          String.t() | Zipper.t() | Macro.t(),
+          [named_pattern()] | %{pattern_name() => Pattern.pattern() | Selector.t()},
+          keyword()
+        ) :: [tagged_match()]
+  def find_many(input, patterns, opts \\ [])
+
+  def find_many(source, patterns, opts) when is_binary(source) do
+    source
+    |> Sourceror.parse_string!()
+    |> do_find_many(named_patterns!(patterns), opts, nil, source_lines(source))
+  end
+
+  def find_many(%Zipper{} = zipper, patterns, opts) do
+    zipper |> Zipper.topmost_root() |> do_find_many(named_patterns!(patterns), opts, nil, nil)
+  end
+
+  def find_many(ast, patterns, opts) do
+    do_find_many(ast, named_patterns!(patterns), opts, nil, nil)
+  end
+
+  @doc false
+  @spec named_patterns!([named_pattern()] | %{pattern_name() => Pattern.pattern() | Selector.t()}) ::
+          [named_pattern()]
+  def named_patterns!(patterns) when is_map(patterns), do: Map.to_list(patterns)
+
+  def named_patterns!(patterns) when is_list(patterns) do
+    if Keyword.keyword?(patterns) do
+      patterns
+    else
+      raise ArgumentError, "expected a keyword list or map of named patterns"
+    end
+  end
+
+  def named_patterns!(_patterns) do
+    raise ArgumentError, "expected a keyword list or map of named patterns"
   end
 
   @doc """
@@ -162,10 +220,34 @@ defmodule ExAST.Patcher do
       if Pattern.multi_node?(pattern) do
         collect_sequence_matches(ast, pattern, alias_env)
       else
-        ast |> Zipper.zip() |> collect_matches(pattern, alias_env, [])
+        compiled_pattern = Pattern.compile(pattern)
+        signature = Pattern.candidate_signature(compiled_pattern)
+        ast |> Zipper.zip() |> collect_matches(compiled_pattern, signature, alias_env, [])
       end
 
     apply_where(matches, opts, alias_env, source_lines)
+  end
+
+  defp do_find_many(ast, patterns, opts, comments, source_lines) do
+    alias_env = Pattern.collect_aliases(ast)
+    {compiled, fallback} = split_many_patterns(patterns)
+
+    compiled_matches =
+      case compiled do
+        [] -> []
+        patterns -> ast |> Zipper.zip() |> collect_many_matches(patterns, alias_env, %{}, [])
+      end
+
+    compiled_matches = apply_where(compiled_matches, opts, alias_env, source_lines)
+
+    fallback_matches =
+      Enum.flat_map(fallback, fn {name, pattern} ->
+        ast
+        |> do_find_all(pattern, opts, comments, source_lines)
+        |> Enum.map(&Map.put(&1, :pattern, name))
+      end)
+
+    compiled_matches ++ fallback_matches
   end
 
   # --- Core replace logic (AST → AST) ---
@@ -198,21 +280,111 @@ defmodule ExAST.Patcher do
 
   # --- Single-node matching ---
 
-  defp collect_matches(nil, _pattern, _alias_env, acc), do: Enum.reverse(acc)
+  defp collect_matches(nil, _pattern, _signature, _alias_env, acc), do: Enum.reverse(acc)
 
-  defp collect_matches(zipper, pattern, alias_env, acc) do
+  defp collect_matches(zipper, compiled_pattern, signature, alias_env, acc) do
     node = Zipper.node(zipper)
 
-    case Pattern.match(node, pattern, alias_env) do
+    if Pattern.candidate?(node, signature) do
+      collect_match(zipper, node, compiled_pattern, signature, alias_env, acc)
+    else
+      zipper |> Zipper.next() |> collect_matches(compiled_pattern, signature, alias_env, acc)
+    end
+  end
+
+  defp collect_match(zipper, node, compiled_pattern, signature, alias_env, acc) do
+    case Pattern.match_compiled(node, compiled_pattern, alias_env) do
       {:ok, captures} ->
         range = safe_range(node)
         ancestors = collect_ancestors(zipper)
         match = %{node: node, range: range, captures: captures, ancestors: ancestors}
-        zipper |> Zipper.skip() |> collect_matches(pattern, alias_env, [match | acc])
+
+        zipper
+        |> Zipper.skip()
+        |> collect_matches(compiled_pattern, signature, alias_env, [match | acc])
 
       :error ->
-        zipper |> Zipper.next() |> collect_matches(pattern, alias_env, acc)
+        zipper |> Zipper.next() |> collect_matches(compiled_pattern, signature, alias_env, acc)
     end
+  end
+
+  defp collect_many_matches(nil, _patterns, _alias_env, _blocked, acc), do: Enum.reverse(acc)
+
+  defp collect_many_matches(zipper, patterns, alias_env, blocked, acc) do
+    node = Zipper.node(zipper)
+
+    candidates =
+      Enum.filter(patterns, fn {_id, _name, _pattern, signature} ->
+        Pattern.candidate?(node, signature)
+      end)
+
+    if candidates == [] do
+      zipper |> Zipper.next() |> collect_many_matches(patterns, alias_env, blocked, acc)
+    else
+      collect_many_candidate_matches(zipper, candidates, patterns, alias_env, blocked, acc)
+    end
+  end
+
+  defp collect_many_candidate_matches(zipper, candidates, patterns, alias_env, blocked, acc) do
+    node = Zipper.node(zipper)
+    normalized_node = Pattern.normalize_node(node, alias_env)
+    ancestors = if map_size(blocked) == 0, do: nil, else: collect_ancestors(zipper)
+
+    {blocked, matches} =
+      match_many_patterns(
+        candidates,
+        node,
+        normalized_node,
+        ancestors,
+        fn -> collect_ancestors(zipper) end,
+        blocked
+      )
+
+    zipper
+    |> Zipper.next()
+    |> collect_many_matches(patterns, alias_env, blocked, matches ++ acc)
+  end
+
+  defp match_many_patterns(patterns, node, normalized_node, ancestors, get_ancestors, blocked) do
+    context = %{
+      ancestors: ancestors,
+      get_ancestors: get_ancestors,
+      normalized_node: normalized_node
+    }
+
+    Enum.reduce(patterns, {blocked, []}, fn {id, _name, _pattern, _signature} = entry,
+                                            {blocked, matches} ->
+      if blocked_by_ancestor?(ancestors, Map.get(blocked, id, [])) do
+        {blocked, matches}
+      else
+        match_many_pattern(entry, node, context, blocked, matches)
+      end
+    end)
+  end
+
+  defp match_many_pattern({id, name, pattern, _signature}, node, context, blocked, matches) do
+    case Pattern.match_normalized(context.normalized_node, pattern) do
+      {:ok, captures} ->
+        match = %{
+          pattern: name,
+          node: node,
+          range: safe_range(node),
+          captures: captures,
+          ancestors: context.ancestors || context.get_ancestors.()
+        }
+
+        {Map.update(blocked, id, [node], &[node | &1]), [match | matches]}
+
+      :error ->
+        {blocked, matches}
+    end
+  end
+
+  defp blocked_by_ancestor?(_ancestors, []), do: false
+  defp blocked_by_ancestor?(nil, _blocked_nodes), do: false
+
+  defp blocked_by_ancestor?(ancestors, blocked_nodes) do
+    Enum.any?(blocked_nodes, fn blocked -> Enum.any?(ancestors, &(&1 == blocked)) end)
   end
 
   # --- Multi-node (sequence) matching ---
@@ -792,6 +964,24 @@ defmodule ExAST.Patcher do
       Enum.any?(ancestors, &(Pattern.match(&1, pattern, alias_env) != :error))
     end)
   end
+
+  defp split_many_patterns(patterns) do
+    patterns
+    |> Enum.with_index()
+    |> Enum.split_with(fn {{_name, pattern}, _idx} -> single_node_pattern?(pattern) end)
+    |> then(fn {compiled, fallback} ->
+      {
+        Enum.map(compiled, fn {{name, pattern}, idx} ->
+          compiled_pattern = Pattern.compile(pattern)
+          {idx, name, compiled_pattern, Pattern.candidate_signature(compiled_pattern)}
+        end),
+        Enum.map(fallback, fn {{name, pattern}, _idx} -> {name, pattern} end)
+      }
+    end)
+  end
+
+  defp single_node_pattern?(%Selector{}), do: false
+  defp single_node_pattern?(pattern), do: not Pattern.multi_node?(pattern)
 
   defp to_quoted(pattern) when is_binary(pattern), do: Code.string_to_quoted!(pattern)
   defp to_quoted(pattern), do: pattern

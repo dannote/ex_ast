@@ -64,6 +64,10 @@ defmodule ExAST do
           captures: ExAST.Pattern.captures()
         }
 
+  @type pattern_name :: ExAST.Patcher.pattern_name()
+  @type named_pattern :: ExAST.Patcher.named_pattern()
+  @type tagged_match :: %{required(:pattern) => pattern_name(), optional(atom()) => term()}
+
   @type diff_result :: ExAST.Diff.Result.t()
 
   @doc """
@@ -88,6 +92,33 @@ defmodule ExAST do
 
       limit when is_integer(limit) and limit >= 0 ->
         search_files_limited(files, pattern, search_opts, limit)
+    end
+  end
+
+  @doc """
+  Searches files for multiple named AST patterns.
+
+  `patterns` may be a keyword list or a map. Returned matches include a
+  `:pattern` field with the matching pattern name. This is more efficient than
+  calling `search/3` repeatedly for analyzers that run many checks over the same
+  files.
+
+  Options are the same as `search/3`.
+  """
+  @spec search_many(String.t() | [String.t()], [named_pattern()] | map(), keyword()) ::
+          [tagged_match()]
+  def search_many(paths, patterns, opts \\ []) do
+    files = resolve_paths(paths)
+    pattern_entries = Patcher.named_patterns!(patterns)
+    Enum.each(pattern_entries, fn {_name, pattern} -> validate_broad_search!(pattern, opts) end)
+    search_opts = Keyword.drop(opts, [:allow_broad, :limit])
+
+    case Keyword.get(opts, :limit) do
+      nil ->
+        Enum.flat_map(files, &search_file_many(&1, pattern_entries, search_opts))
+
+      limit when is_integer(limit) and limit >= 0 ->
+        search_files_many_limited(files, pattern_entries, search_opts, limit)
     end
   end
 
@@ -154,6 +185,23 @@ defmodule ExAST do
     end)
   end
 
+  defp search_files_many_limited(_files, _patterns, _opts, 0), do: []
+
+  defp search_files_many_limited(files, patterns, opts, limit) do
+    files
+    |> Enum.reduce_while([], fn file, acc ->
+      remaining = limit - length(acc)
+      matches = search_file_many(file, patterns, opts, remaining)
+      next = acc ++ matches
+
+      if length(next) >= limit do
+        {:halt, next}
+      else
+        {:cont, next}
+      end
+    end)
+  end
+
   defp search_file(file, pattern, opts, limit \\ nil) do
     source = File.read!(file)
     lines = String.split(source, "\n", trim: false)
@@ -162,13 +210,31 @@ defmodule ExAST do
     |> Patcher.find_all(pattern, opts)
     |> maybe_take(limit)
     |> Enum.map(fn %{range: range, node: node, captures: captures} ->
-      %{
-        file: file,
-        line: match_line(range),
-        source: source_fragment(lines, range) || node_to_string(node),
-        captures: captures
-      }
+      search_match(file, lines, range, node, captures)
     end)
+  end
+
+  defp search_file_many(file, patterns, opts, limit \\ nil) do
+    source = File.read!(file)
+    lines = String.split(source, "\n", trim: false)
+
+    source
+    |> Patcher.find_many(patterns, opts)
+    |> maybe_take(limit)
+    |> Enum.map(fn %{pattern: pattern, range: range, node: node, captures: captures} ->
+      file
+      |> search_match(lines, range, node, captures)
+      |> Map.put(:pattern, pattern)
+    end)
+  end
+
+  defp search_match(file, lines, range, node, captures) do
+    %{
+      file: file,
+      line: match_line(range),
+      source: source_fragment(lines, range) || node_to_string(node),
+      captures: captures
+    }
   end
 
   defp maybe_take(matches, nil), do: matches

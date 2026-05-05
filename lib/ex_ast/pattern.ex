@@ -67,11 +67,51 @@ defmodule ExAST.Pattern do
 
   @spec match(Macro.t(), pattern(), %{optional(atom()) => [atom()]}) :: {:ok, captures()} | :error
   def match(node, pattern, alias_env) do
-    do_match(
-      normalize(expand_aliases(node, alias_env)),
-      pattern |> to_quoted() |> normalize(),
-      %{}
-    )
+    match_compiled(node, compile(pattern), alias_env)
+  end
+
+  @doc false
+  @spec compile(pattern()) :: Macro.t()
+  def compile(pattern) do
+    pattern |> to_quoted() |> normalize()
+  end
+
+  @doc false
+  @spec match_compiled(Macro.t(), Macro.t(), %{optional(atom()) => [atom()]}) ::
+          {:ok, captures()} | :error
+  def match_compiled(node, compiled_pattern, alias_env) do
+    node
+    |> normalize_node(alias_env)
+    |> match_normalized(compiled_pattern)
+  end
+
+  @doc false
+  @spec normalize_node(Macro.t(), %{optional(atom()) => [atom()]}) :: Macro.t()
+  def normalize_node(node, alias_env) do
+    normalize(node, alias_env)
+  end
+
+  @doc false
+  @spec match_normalized(Macro.t(), Macro.t()) :: {:ok, captures()} | :error
+  def match_normalized(normalized_node, compiled_pattern) do
+    do_match(normalized_node, compiled_pattern, %{})
+  end
+
+  @doc false
+  @spec candidate_signature(Macro.t()) :: term()
+  def candidate_signature(compiled_pattern), do: signature(compiled_pattern)
+
+  @doc false
+  @spec candidate?(Macro.t(), Macro.t() | term()) :: boolean()
+  def candidate?(node, {:call, name, arities}), do: call_candidate?(node, name, arities)
+
+  def candidate?(node, {:contains_call, name, arities}),
+    do: contains_call_candidate?(node, name, arities)
+
+  def candidate?(_node, :unknown), do: true
+
+  def candidate?(node, compiled_pattern) do
+    candidate?(node, candidate_signature(compiled_pattern))
   end
 
   @doc """
@@ -88,7 +128,7 @@ defmodule ExAST.Pattern do
   @spec match_ast(Macro.t(), Macro.t(), %{optional(atom()) => [atom()]}) ::
           {:ok, captures()} | :error
   def match_ast(node, pattern_ast, alias_env) do
-    do_match(normalize(expand_aliases(node, alias_env)), normalize(pattern_ast), %{})
+    match_compiled(node, compile(pattern_ast), alias_env)
   end
 
   @doc """
@@ -107,7 +147,7 @@ defmodule ExAST.Pattern do
   def match_sequences(nodes, pattern_asts, alias_env)
       when is_list(nodes) and is_list(pattern_asts) do
     pattern_count = length(pattern_asts)
-    normalized_nodes = Enum.map(nodes, &normalize(expand_aliases(&1, alias_env)))
+    normalized_nodes = Enum.map(nodes, &normalize(&1, alias_env))
     normalized_patterns = Enum.map(pattern_asts, &normalize/1)
     do_match_sequences(normalized_nodes, normalized_patterns, pattern_count, 0, [])
   end
@@ -181,6 +221,36 @@ defmodule ExAST.Pattern do
 
   defp normalize(other), do: other
 
+  defp normalize({:__block__, _meta, [inner]}, alias_env), do: normalize(inner, alias_env)
+
+  defp normalize({:|>, _meta, [left, {form, meta2, args}]}, alias_env) when is_list(args),
+    do: normalize({form, meta2, [left | args]}, alias_env)
+
+  defp normalize({:|>, _meta, [left, {form, meta2, nil}]}, alias_env),
+    do: normalize({form, meta2, [left]}, alias_env)
+
+  defp normalize({:__aliases__, meta, [name]} = node, alias_env) when is_atom(name) do
+    {:__aliases__, _meta, parts} = expand_alias_node(node, meta, name, alias_env)
+    {:__aliases__, nil, parts}
+  end
+
+  defp normalize({form, _meta, context}, _alias_env) when is_atom(form) and is_atom(context),
+    do: {form, nil, nil}
+
+  defp normalize({form, _meta, args}, alias_env) when is_atom(form),
+    do: {form, nil, normalize(args, alias_env)}
+
+  defp normalize({form, _meta, args}, alias_env),
+    do: {normalize(form, alias_env), nil, normalize(args, alias_env)}
+
+  defp normalize({left, right}, alias_env),
+    do: {normalize(left, alias_env), normalize(right, alias_env)}
+
+  defp normalize(list, alias_env) when is_list(list),
+    do: Enum.map(list, &normalize(&1, alias_env))
+
+  defp normalize(other, _alias_env), do: other
+
   @doc false
   def collect_aliases(ast) do
     {_ast, aliases} =
@@ -198,7 +268,7 @@ defmodule ExAST.Pattern do
   defp collect_alias_directive([target], acc), do: register_alias_target(acc, target)
 
   defp collect_alias_directive([target, opts], acc) when is_list(opts) do
-    case Keyword.get(opts, :as) do
+    case alias_as(opts) do
       nil -> register_alias_target(acc, target)
       as_alias -> put_alias(acc, as_alias, target)
     end
@@ -207,6 +277,14 @@ defmodule ExAST.Pattern do
   defp collect_alias_directive(args, acc) when is_list(args) do
     Enum.reduce(args, acc, fn target, aliases ->
       register_alias_target(aliases, target)
+    end)
+  end
+
+  defp alias_as(opts) do
+    Enum.find_value(opts, fn
+      {:as, as_alias} -> as_alias
+      {{:__block__, _, [:as]}, as_alias} -> as_alias
+      _other -> nil
     end)
   end
 
@@ -237,21 +315,104 @@ defmodule ExAST.Pattern do
 
   defp put_alias(acc, _alias_ast, _target_ast), do: acc
 
-  defp expand_aliases(ast, alias_env) do
-    Macro.prewalk(ast, fn
-      {:alias, _, _} = node -> node
-      {:defmodule, meta, [name, body]} -> {:defmodule, meta, [name, body]}
-      {:__aliases__, meta, [name]} = node -> expand_alias_node(node, meta, name, alias_env)
-      node -> node
-    end)
-  end
-
   defp expand_alias_node(node, meta, name, alias_env) do
     case Map.fetch(alias_env, name) do
       {:ok, parts} -> {:__aliases__, meta, parts}
       :error -> node
     end
   end
+
+  # --- Candidate prefiltering ---
+
+  defp signature({{:., nil, [_target, name]}, nil, args}) when is_atom(name) and is_list(args),
+    do: {:call, name, arity_signature(args)}
+
+  defp signature({name, nil, args}) when is_atom(name) and is_list(args),
+    do: {:call, name, arity_signature(args)}
+
+  defp signature(pattern) do
+    case nested_call_signature(pattern) do
+      {:call, name, arities} -> {:contains_call, name, arities}
+      :unknown -> :unknown
+    end
+  end
+
+  defp nested_call_signature({{:., nil, [_target, name]}, nil, args})
+       when is_atom(name) and is_list(args),
+       do: {:call, name, arity_signature(args)}
+
+  defp nested_call_signature({name, nil, args}) when is_atom(name) and is_list(args),
+    do: {:call, name, arity_signature(args)}
+
+  defp nested_call_signature({form, _meta, args}) when is_list(args) do
+    nested_call_signature(form, args)
+  end
+
+  defp nested_call_signature({left, right}) do
+    first_signature([left, right])
+  end
+
+  defp nested_call_signature(list) when is_list(list), do: first_signature(list)
+  defp nested_call_signature(_pattern), do: :unknown
+
+  defp nested_call_signature(form, args) do
+    case nested_call_signature(form) do
+      :unknown -> first_signature(args)
+      signature -> signature
+    end
+  end
+
+  defp first_signature(nodes) do
+    Enum.find_value(nodes, :unknown, fn node ->
+      case nested_call_signature(node) do
+        :unknown -> nil
+        signature -> signature
+      end
+    end)
+  end
+
+  defp arity_signature(args) do
+    if Enum.any?(args, &ellipsis?/1) do
+      :any
+    else
+      length(args)
+    end
+  end
+
+  defp call_candidate?({{:., _, [_target, call_name]}, _, args}, name, arities)
+       when is_atom(call_name) and is_list(args),
+       do: call_name == name and arity_candidate?(length(args), arities)
+
+  defp call_candidate?({call_name, _, args}, name, arities)
+       when is_atom(call_name) and is_list(args),
+       do: call_name == name and arity_candidate?(length(args), arities)
+
+  defp call_candidate?({:|>, _, [_left, {{:., _, [_target, call_name]}, _, args}]}, name, arities)
+       when is_atom(call_name) and is_list(args),
+       do: call_name == name and arity_candidate?(length(args) + 1, arities)
+
+  defp call_candidate?({:|>, _, [_left, {call_name, _, args}]}, name, arities)
+       when is_atom(call_name) and is_list(args),
+       do: call_name == name and arity_candidate?(length(args) + 1, arities)
+
+  defp call_candidate?(_node, _name, _arities), do: false
+
+  defp contains_call_candidate?(node, name, arities) do
+    call_candidate?(node, name, arities) or
+      node
+      |> raw_children()
+      |> Enum.any?(&contains_call_candidate?(&1, name, arities))
+  end
+
+  defp raw_children({:__block__, _meta, children}) when is_list(children), do: children
+  defp raw_children({_form, _meta, args}) when is_list(args), do: args
+  defp raw_children({left, right}), do: [left, right]
+  defp raw_children(list) when is_list(list), do: list
+  defp raw_children(_node), do: []
+
+  defp arity_candidate?(_arity, :any), do: true
+  defp arity_candidate?(arity, arity), do: true
+  defp arity_candidate?(_arity, _expected), do: false
 
   # --- Matching ---
 

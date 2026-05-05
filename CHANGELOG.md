@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.10.0
+
+### Added
+
+- `ExAST.Patcher.find_many/3` for running multiple named AST pattern checks in a
+  single traversal where possible, returning matches tagged with `:pattern`.
+- `ExAST.search_many/3` for searching files with multiple named patterns while
+  preserving `search/3` options such as `:limit`.
+
+### Changed
+
+- Optimized repeated single-node pattern matching by compiling patterns once,
+  normalizing candidate nodes once per traversal, and using conservative call
+  signature prefilters for common local, remote, piped, and nested call patterns.
+
 ## 0.9.1
 
 ### Changed

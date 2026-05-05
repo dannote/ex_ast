@@ -506,6 +506,118 @@ defmodule ExAST.PatcherTest do
     end
   end
 
+  describe "candidate prefiltering" do
+    test "keeps module attribute patterns with nested remote calls" do
+      source = """
+      @name Application.get_env(:app, :name)
+      @other :literal
+      """
+
+      assert [%{source: "@name Application.get_env(:app, :name)"}] =
+               Patcher.find_all(source, "@_ Application.get_env(_, _)")
+    end
+
+    test "keeps nested remote calls under aliases" do
+      source = """
+      alias Application, as: App
+      @name App.get_env(:app, :name)
+      """
+
+      assert [%{source: "@name App.get_env(:app, :name)"}] =
+               Patcher.find_all(source, "@_ Application.get_env(_, _)")
+    end
+
+    test "keeps patterns with nested calls inside arguments" do
+      source = "wrap(Application.get_env(:app, :name))"
+
+      assert [%{source: "wrap(Application.get_env(:app, :name))"}] =
+               Patcher.find_all(source, "wrap(Application.get_env(_, _))")
+    end
+
+    test "keeps nested piped calls" do
+      source = "@items list |> Enum.map(fun)"
+
+      assert [%{source: "@items list |> Enum.map(fun)"}] =
+               Patcher.find_all(source, "@_ Enum.map(_, _)")
+    end
+
+    test "keeps nested calls in batched scans" do
+      source = """
+      @name Application.get_env(:app, :name)
+      dbg(value)
+      """
+
+      assert [%{pattern: :env}, %{pattern: :debug}] =
+               Patcher.find_many(source,
+                 env: "@_ Application.get_env(_, _)",
+                 debug: "dbg(_)"
+               )
+    end
+
+    test "does not reject broad nested captures" do
+      source = "wrap(dynamic(:value))"
+
+      assert [%{captures: %{expr: {:dynamic, nil, [:value]}}}] =
+               Patcher.find_all(source, "wrap(expr)")
+    end
+  end
+
+  describe "find_many/3" do
+    test "finds multiple named patterns in one source scan" do
+      source = """
+      IO.inspect(value)
+      dbg(other)
+      IO.puts("keep")
+      """
+
+      matches =
+        Patcher.find_many(source,
+          inspect_call: "IO.inspect(expr)",
+          dbg_call: "dbg(expr)"
+        )
+
+      assert [inspect_match, dbg_match] = matches
+      assert inspect_match.pattern == :inspect_call
+      assert inspect_match.source == "IO.inspect(value)"
+      assert inspect_match.captures[:expr] == {:value, nil, nil}
+      assert dbg_match.pattern == :dbg_call
+      assert dbg_match.source == "dbg(other)"
+    end
+
+    test "accepts maps of named patterns" do
+      source = "IO.inspect(value)"
+
+      assert [%{pattern: :inspect_call}] =
+               Patcher.find_many(source, %{inspect_call: "IO.inspect(_)"})
+    end
+
+    test "respects inside filters" do
+      source = """
+      defmodule A do
+        def run, do: IO.inspect(1)
+        defp helper, do: IO.inspect(2)
+      end
+      """
+
+      matches =
+        Patcher.find_many(source, [inspect_call: "IO.inspect(expr)"], inside: "defp _ do _ end")
+
+      assert [%{source: "IO.inspect(2)", pattern: :inspect_call}] = matches
+    end
+
+    test "falls back for sequence patterns with tagged results" do
+      source = """
+      a = Repo.get!(User, id)
+      Repo.delete(a)
+      """
+
+      assert [%{pattern: :delete_after_get}] =
+               Patcher.find_many(source,
+                 delete_after_get: "a = Repo.get!(_, _); Repo.delete(a)"
+               )
+    end
+  end
+
   describe "ellipsis matching" do
     test "find_all matches any arity with ellipsis" do
       source = """

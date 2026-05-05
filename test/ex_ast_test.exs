@@ -33,6 +33,45 @@ defmodule ExASTTest do
     end
   end
 
+  describe "search_many/3" do
+    @tag :tmp_dir
+    test "finds named patterns across files", %{tmp_dir: dir} do
+      path = Path.join(dir, "a.ex")
+
+      File.write!(path, """
+      IO.inspect(data)
+      dbg(other)
+      """)
+
+      results =
+        ExAST.search_many(dir,
+          inspect_call: "IO.inspect(expr)",
+          dbg_call: "dbg(expr)"
+        )
+
+      assert [inspect_match, dbg_match] = results
+      assert inspect_match.file == path
+      assert inspect_match.pattern == :inspect_call
+      assert inspect_match.line == 1
+      assert inspect_match.source == "IO.inspect(data)"
+      assert dbg_match.pattern == :dbg_call
+      assert dbg_match.source == "dbg(other)"
+    end
+
+    @tag :tmp_dir
+    test "respects limit", %{tmp_dir: dir} do
+      File.write!(Path.join(dir, "a.ex"), """
+      IO.inspect(a)
+      dbg(b)
+      """)
+
+      assert [_] =
+               ExAST.search_many(dir, [inspect_call: "IO.inspect(_)", dbg_call: "dbg(_)"],
+                 limit: 1
+               )
+    end
+  end
+
   describe "replace/4" do
     @tag :tmp_dir
     test "modifies files and returns count", %{tmp_dir: dir} do
