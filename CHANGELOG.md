@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.1
+
+### Fixed
+
+- Restored pipe-aware pattern matching after the `0.10.0` candidate prefilter
+  optimization. Piped calls such as `data |> Enum.map(fun)` now match direct
+  call patterns like `Enum.map(_, _)` again.
+
 ## 0.10.0
 
 ### Added
