@@ -379,14 +379,6 @@ defmodule ExAST.Pattern do
     end
   end
 
-  defp call_candidate?({{:., _, [_target, call_name]}, _, args}, name, arities)
-       when is_atom(call_name) and is_list(args),
-       do: call_name == name and arity_candidate?(length(args), arities)
-
-  defp call_candidate?({call_name, _, args}, name, arities)
-       when is_atom(call_name) and is_list(args),
-       do: call_name == name and arity_candidate?(length(args), arities)
-
   defp call_candidate?({:|>, _, [_left, {{:., _, [_target, call_name]}, _, args}]}, name, arities)
        when is_atom(call_name) and is_list(args),
        do: call_name == name and arity_candidate?(length(args) + 1, arities)
@@ -394,6 +386,14 @@ defmodule ExAST.Pattern do
   defp call_candidate?({:|>, _, [_left, {call_name, _, args}]}, name, arities)
        when is_atom(call_name) and is_list(args),
        do: call_name == name and arity_candidate?(length(args) + 1, arities)
+
+  defp call_candidate?({{:., _, [_target, call_name]}, _, args}, name, arities)
+       when is_atom(call_name) and is_list(args),
+       do: call_name == name and arity_candidate?(length(args), arities)
+
+  defp call_candidate?({call_name, _, args}, name, arities)
+       when is_atom(call_name) and is_list(args),
+       do: call_name == name and arity_candidate?(length(args), arities)
 
   defp call_candidate?(_node, _name, _arities), do: false
 

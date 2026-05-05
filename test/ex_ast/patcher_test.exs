@@ -534,6 +534,20 @@ defmodule ExAST.PatcherTest do
                Patcher.find_all(source, "wrap(Application.get_env(_, _))")
     end
 
+    test "keeps piped calls matched by direct-call patterns" do
+      source = "data |> Enum.map(&to_string/1)"
+
+      assert [%{source: "data |> Enum.map(&to_string/1)"}] =
+               Patcher.find_all(source, "Enum.map(_, _)")
+    end
+
+    test "keeps explicit pipe patterns" do
+      source = "Enum.reverse(values) |> hd()"
+
+      assert [%{source: "Enum.reverse(values) |> hd()"}] =
+               Patcher.find_all(source, "Enum.reverse(_) |> hd()")
+    end
+
     test "keeps nested piped calls" do
       source = "@items list |> Enum.map(fun)"
 
