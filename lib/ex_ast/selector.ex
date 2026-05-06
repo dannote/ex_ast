@@ -293,6 +293,30 @@ defmodule ExAST.Selector do
   @spec not Predicate.t() :: Predicate.t()
   def not (%Predicate{} = predicate), do: %{predicate | negated?: Kernel.not(predicate.negated?)}
 
+  @doc "Returns true when matching this selector requires source text."
+  @spec requires_source?(t()) :: boolean()
+  def requires_source?(%__MODULE__{} = selector), do: requires_comments?(selector)
+
+  @doc "Returns true when matching this selector depends on comments."
+  @spec requires_comments?(t()) :: boolean()
+  def requires_comments?(%__MODULE__{filters: filters}) do
+    Enum.any?(filters, &comment_predicate?/1)
+  end
+
+  @doc "Finds selector matches in source text, AST, or a Sourceror zipper."
+  @spec find_all(String.t() | Macro.t() | Sourceror.Zipper.t(), t(), keyword()) :: [map()]
+  def find_all(input, %__MODULE__{} = selector, opts \\ []) do
+    ExAST.Patcher.find_all(input, selector, opts)
+  end
+
+  @doc "Returns true when the selector matches at least once."
+  @spec match?(String.t() | Macro.t() | Sourceror.Zipper.t(), t(), keyword()) :: boolean()
+  def match?(input, %__MODULE__{} = selector, opts \\ []) do
+    input
+    |> find_all(selector, Keyword.put(opts, :limit, 1))
+    |> Kernel.!=([])
+  end
+
   defp add_step(%__MODULE__{steps: steps} = selector, relation, pattern) do
     %{selector | steps: steps ++ [{relation, pattern}]}
   end
@@ -359,6 +383,23 @@ defmodule ExAST.Selector do
   defp add_filter(%__MODULE__{filters: filters} = selector, %Predicate{} = predicate) do
     %{selector | filters: filters ++ [predicate]}
   end
+
+  defp comment_predicate?(%Predicate{relation: relation})
+       when relation in [
+              :comment,
+              :comment_before,
+              :comment_after,
+              :comment_inside,
+              :comment_inline
+            ],
+       do: true
+
+  defp comment_predicate?(%Predicate{relation: relation, pattern: predicates})
+       when relation in [:any, :all] and is_list(predicates) do
+    Enum.any?(predicates, &comment_predicate?/1)
+  end
+
+  defp comment_predicate?(_predicate), do: false
 
   defp predicate(relation, patterns) when relation in [:any, :all] do
     %Predicate{relation: relation, pattern: patterns}
