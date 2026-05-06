@@ -49,6 +49,7 @@ defmodule ExAST.MixProject do
         "guides/getting-started.md",
         "guides/pattern-language.md",
         "guides/querying.md",
+        "guides/indexing.md",
         "guides/cli.md",
         "guides/diff.md"
       ],

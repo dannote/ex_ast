@@ -9,10 +9,11 @@ defmodule ExAST.Symbol.Reference do
           name: String.t(),
           arity: non_neg_integer() | nil,
           qualified_name: String.t(),
+          mfa: {module(), atom(), non_neg_integer()} | nil,
           line: pos_integer() | nil,
           column: pos_integer() | nil,
           node: Macro.t()
         }
 
-  defstruct [:kind, :module, :name, :arity, :qualified_name, :line, :column, :node]
+  defstruct [:kind, :module, :name, :arity, :qualified_name, :mfa, :line, :column, :node]
 end

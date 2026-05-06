@@ -50,7 +50,7 @@ from("def _ do ... end")
 
 ```elixir
 def deps do
-  [{:ex_ast, "~> 0.9", only: [:dev, :test], runtime: false}]
+  [{:ex_ast, "~> 0.10", only: [:dev, :test], runtime: false}]
 end
 ```
 
@@ -61,6 +61,7 @@ end
 | [Getting Started](https://hexdocs.pm/ex_ast/getting-started.html) | Install, first search, first replace |
 | [Pattern Language](https://hexdocs.pm/ex_ast/pattern-language.html) | Syntax, wildcards, captures, ellipsis, pipes, recipes |
 | [Querying](https://hexdocs.pm/ex_ast/querying.html) | Relationship filters, selectors, capture guards |
+| [Indexing and Code Intelligence](https://hexdocs.pm/ex_ast/indexing.html) | Structural terms, selector plans, comments, symbols |
 | [CLI Reference](https://hexdocs.pm/ex_ast/cli.html) | Command-line flags and usage |
 | [Diff](https://hexdocs.pm/ex_ast/diff.html) | Syntax-aware code diffing |
 | [API Reference](https://hexdocs.pm/ex_ast/api-reference.html) | Module documentation |
@@ -94,6 +95,35 @@ use GenServer
 case _ do _ -> _ end
 fn _ -> _ end
 ```
+
+## Code intelligence APIs
+
+ExAST can expose advisory metadata for external indexes while remaining the
+semantic verifier:
+
+```elixir
+import ExAST.Query
+
+selector =
+  from("def _ do ... end")
+  |> where(contains("Repo.transaction(_)"))
+
+ExAST.Index.plan(selector)
+#=> %ExAST.Index.Plan{required_terms: ..., requires_source?: false}
+
+ExAST.Symbols.definitions(source)
+ExAST.Symbols.references(source)
+ExAST.Comments.extract(source)
+
+ExAST.Symbols.qualified_name({Enum, :map, 2})
+#=> "Enum.map/2"
+```
+
+Symbols keep stable string names for indexing and expose optional `mfa` tuples
+when a BEAM module can be safely resolved.
+
+Use these terms and facts to retrieve candidates, then verify with
+`ExAST.Selector.find_all/3` or `ExAST.Selector.match?/3`.
 
 ## Limitations
 

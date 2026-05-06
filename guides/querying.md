@@ -157,6 +157,28 @@ Any Elixir expression works inside `where` — `match?/2`, `is_atom/1`, comparis
 function calls. The `^name` references are replaced with the corresponding
 captured AST node at match time.
 
+## Selector introspection and verification
+
+Selectors expose source/comment requirements and direct verification helpers:
+
+```elixir
+selector =
+  from("def _ do ... end")
+  |> where(comment_before("public API"))
+
+ExAST.Selector.requires_source?(selector)
+#=> true
+
+ExAST.Selector.requires_comments?(selector)
+#=> true
+
+ExAST.Selector.find_all(source, selector)
+ExAST.Selector.match?(source, selector)
+```
+
+For candidate indexing and code intelligence metadata, see
+[Indexing and Code Intelligence](indexing.md).
+
 ## Broad queries
 
 `from("_")` matches every AST node. Project-wide searches refuse those

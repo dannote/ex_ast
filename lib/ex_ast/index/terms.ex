@@ -9,8 +9,15 @@ defmodule ExAST.Index.Terms do
   @type mode :: :source | :pattern
   @type signal :: :high | :normal | :low
 
-  @spec from_source(Macro.t()) :: MapSet.t(String.t())
-  def from_source(ast), do: ast |> collect(:source) |> MapSet.new()
+  @spec from_source(String.t()) :: MapSet.t(String.t())
+  def from_source(source) when is_binary(source) do
+    source
+    |> Sourceror.parse_string!()
+    |> from_ast()
+  end
+
+  @spec from_ast(Macro.t()) :: MapSet.t(String.t())
+  def from_ast(ast), do: ast |> collect(:source) |> MapSet.new()
 
   @spec from_pattern(ExAST.Pattern.pattern() | [ExAST.Pattern.pattern()]) :: MapSet.t(String.t())
   def from_pattern({:__ex_ast_any_patterns__, patterns}) when is_list(patterns) do

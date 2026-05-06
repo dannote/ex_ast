@@ -31,6 +31,9 @@ defmodule ExAST.SymbolsTest do
     assert "Example.delegated/1" in qualified_names
     assert "OtherModule.other/0" in qualified_names
     refute "Example.other/0" in qualified_names
+
+    assert Enum.find(definitions, &(&1.qualified_name == "Example.run/1")).mfa ==
+             {Example, :run, 1}
   end
 
   test "extracts remote and local references" do
@@ -49,5 +52,20 @@ defmodule ExAST.SymbolsTest do
     assert "helper/1" in qualified_names
     refute "def/2" in qualified_names
     refute "defmodule/2" in qualified_names
+  end
+
+  test "normalizes and matches qualified names and MFA tuples" do
+    reference =
+      Symbols.references("""
+      Enum.map(items, & &1.id)
+      """)
+      |> Enum.find(&(&1.qualified_name == "Enum.map/2"))
+
+    assert reference.mfa == {Enum, :map, 2}
+    assert Symbols.qualified_name({Enum, :map, 2}) == "Enum.map/2"
+    assert Symbols.qualified_name({"Enum", :map, 2}) == "Enum.map/2"
+    assert Symbols.mfa("Enum.map/2") == {Enum, :map, 2}
+    assert Symbols.matches?(reference, {Enum, :map, 2})
+    assert Symbols.matches?(reference, "Enum.map/2")
   end
 end

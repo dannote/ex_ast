@@ -6,7 +6,7 @@ Add ExAST as a dev dependency:
 
 ```elixir
 def deps do
-  [{:ex_ast, "~> 0.9", only: [:dev, :test], runtime: false}]
+  [{:ex_ast, "~> 0.10", only: [:dev, :test], runtime: false}]
 end
 ```
 
@@ -70,5 +70,6 @@ ExAST.Patcher.replace_all(source_code, "dbg(expr)", "expr")
 
 - [Pattern Language](pattern-language.md) — full syntax reference
 - [Querying](querying.md) — relationship filters, selectors, capture guards
+- [Indexing and Code Intelligence](indexing.md) — structural terms, selector plans, comments, symbols
 - [CLI Reference](cli.md) — command-line flags and usage
 - [Diff](diff.md) — syntax-aware code diffing

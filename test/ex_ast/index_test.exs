@@ -6,10 +6,15 @@ defmodule ExAST.IndexTest do
   alias ExAST.Index
   alias ExAST.Index.Terms
 
-  test "extracts structural source and pattern terms" do
+  test "extracts structural source, AST, and pattern terms" do
     ast = Code.string_to_quoted!("Repo.transaction(fn -> :ok end)")
 
-    assert MapSet.member?(Terms.from_source(ast), "call.remote:Repo.transaction/1")
+    assert MapSet.member?(
+             Terms.from_source("Repo.transaction(fn -> :ok end)"),
+             "call.remote:Repo.transaction/1"
+           )
+
+    assert MapSet.member?(Terms.from_ast(ast), "call.remote:Repo.transaction/1")
     assert MapSet.member?(Terms.from_pattern("def run(arg) do ... end"), "def:run/1")
   end
 
