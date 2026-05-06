@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.11.0
+
+### Added
+
+- `ExAST.Index.plan/1`, `ExAST.Index.terms/1`, and structural index plan
+  structs for building external candidate indexes while keeping ExAST as the
+  semantic verifier.
+- `ExAST.Index.Terms.from_source/1`, `from_ast/1`, `from_pattern/1`, and term
+  signal classification helpers.
+- `ExAST.Selector.requires_source?/1`, `requires_comments?/1`, `find_all/3`,
+  and `match?/3` for source-aware selector planning and verification.
+- `ExAST.Comments.extract/1` and `ExAST.Comments.text/1` for comment extraction
+  with source position metadata.
+- `ExAST.Symbols.definitions/1` and `ExAST.Symbols.references/1` for syntactic
+  definition/reference extraction.
+- Symbol helpers for stable qualified names and optional BEAM-native MFA tuples:
+  `ExAST.Symbols.qualified_name/1`, `mfa/1`, and `matches?/2`.
+- Indexing and code intelligence guide.
+
 ## 0.10.1
 
 ### Fixed
