@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.1
+
+### Added
+
+- `piped()` selector predicate — matches only when the selected node is a pipe
+  expression (`|>`). Since ExAST normalizes pipes during matching, there was
+  previously no way to distinguish piped from direct call forms. Use
+  `where(piped())` to match only piped calls, or `where(not piped())` for
+  direct calls only.
+
 ## 0.11.0
 
 ### Added
