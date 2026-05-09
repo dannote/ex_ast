@@ -262,6 +262,58 @@ defmodule ExAST.SelectorTest do
       [match] = Patcher.find_all(source, selector)
       assert match.captures[:name] == {:without_debug, nil, nil}
     end
+
+    test "piped() matches only pipe expressions" do
+      source = """
+      defmodule Example do
+        def piped(text), do: text |> Regex.replace(~r/foo/, "")
+        def direct(text), do: Regex.replace(~r/foo/, text, "")
+      end
+      """
+
+      selector =
+        pattern("Regex.replace(_, _, _)")
+        |> where(piped())
+
+      matches = Patcher.find_all(source, selector)
+      assert length(matches) == 1
+      assert Sourceror.to_string(matches |> hd() |> Map.get(:node)) =~ "|>"
+    end
+
+    test "not(piped()) matches only direct calls" do
+      source = """
+      defmodule Example do
+        def piped(text), do: text |> Regex.replace(~r/foo/, "")
+        def direct(text), do: Regex.replace(~r/foo/, text, "")
+      end
+      """
+
+      selector =
+        pattern("Regex.replace(_, _, _)")
+        |> where(not piped())
+
+      matches = Patcher.find_all(source, selector)
+      assert length(matches) == 1
+      matched_source = matches |> hd() |> Map.get(:node) |> Sourceror.to_string()
+      assert String.contains?(matched_source, "Regex.replace")
+      refute String.contains?(matched_source, "|>")
+    end
+
+    test "piped() works with multi-step pipes" do
+      source = """
+      defmodule Example do
+        def a(x), do: x |> Enum.map(&to_string/1) |> Enum.join(",")
+        def b(x), do: Enum.join(Enum.map(x, &to_string/1), ",")
+      end
+      """
+
+      selector =
+        pattern("Enum.join(_, _)")
+        |> where(piped())
+
+      matches = Patcher.find_all(source, selector)
+      assert length(matches) == 1
+    end
   end
 
   describe "complex selector scenarios" do

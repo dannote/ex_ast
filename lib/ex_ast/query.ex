@@ -124,6 +124,9 @@ defmodule ExAST.Query do
   @doc "Matches when the immediately following sibling matches `pattern`."
   defdelegate immediately_precedes(pattern), to: Selector
 
+  @doc "Matches when the selected node is a pipe expression."
+  defdelegate piped(), to: Selector
+
   @doc "Matches the first semantic child in its parent."
   defdelegate first(), to: Selector
 

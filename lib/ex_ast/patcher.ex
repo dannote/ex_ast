@@ -594,6 +594,12 @@ defmodule ExAST.Patcher do
     end
   end
 
+  defp selector_filter?(%{node: {:|>, _, _}}, :piped, _pattern, _root_ast, _alias_env, _comments),
+    do: true
+
+  defp selector_filter?(_match, :piped, _pattern, _root_ast, _alias_env, _comments),
+    do: false
+
   defp selector_filter?(match, :first, _pattern, _root_ast, _alias_env, _comments),
     do: sibling_position(match) == 0
 

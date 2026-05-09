@@ -35,6 +35,7 @@ defmodule ExAST.Selector.Predicate do
           | :last
           | :nth
           | :captures
+          | :piped
           | :comment
           | :comment_before
           | :comment_after
@@ -233,6 +234,10 @@ defmodule ExAST.Selector do
   @spec immediately_precedes(ExAST.Pattern.pattern()) :: Predicate.t()
   def immediately_precedes(pattern), do: predicate(:immediately_precedes, pattern)
 
+  @doc "Matches when the selected node is a pipe expression."
+  @spec piped() :: Predicate.t()
+  def piped, do: predicate(:piped, nil)
+
   @doc "Matches the first semantic child in its parent."
   @spec first() :: Predicate.t()
   def first, do: predicate(:first, nil)
@@ -336,7 +341,7 @@ defmodule ExAST.Selector do
   defp build_predicate_from_ast({:all, _, [predicates]}),
     do: all(Enum.map(list_ast_to_list(predicates), &build_predicate_from_ast/1))
 
-  defp build_predicate_from_ast({name, _, []}) when name in [:first, :last] do
+  defp build_predicate_from_ast({name, _, []}) when name in [:first, :last, :piped] do
     apply(__MODULE__, name, [])
   end
 
