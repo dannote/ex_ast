@@ -54,7 +54,7 @@ from("def _ do ... end")
 
 ```elixir
 def deps do
-  [{:ex_ast, "~> 0.11", only: [:dev, :test], runtime: false}]
+  [{:ex_ast, "~> 0.12", only: [:dev, :test], runtime: false}]
 end
 ```
 
